@@ -27,7 +27,12 @@ function showModal({ html, escValue, bagla }) {
 
     requestAnimationFrame(() => requestAnimationFrame(() => kutu.classList.add('cm-acik')));
 
+    let cleanup = null;
+    let escHandler = null;
+
     function kapat(val) {
+      if (typeof cleanup === 'function') cleanup();
+      if (escHandler) document.removeEventListener('keydown', escHandler);
       kutu.classList.remove('cm-acik');
       setTimeout(() => {
         arka.style.display = 'none';
@@ -35,11 +40,10 @@ function showModal({ html, escValue, bagla }) {
       }, 200);
     }
 
-    bagla(kutu, kapat);
+    cleanup = bagla(kutu, kapat);
 
-    const escHandler = (e) => {
+    escHandler = (e) => {
       if (e.key === 'Escape') {
-        document.removeEventListener('keydown', escHandler);
         kapat(escValue !== undefined ? escValue : null);
       }
     };
@@ -62,19 +66,35 @@ export function showAlert(mesaj, baslik = 'Bilgi') {
   });
 }
 
-export function showConfirm(mesaj, baslik = 'Onay') {
+export function showConfirm(mesaj, baslik = 'Onay', secenekler = {}) {
+  const ekButonEtiketi = secenekler?.ekButonEtiketi || '';
+  const ekButonDegeri = secenekler?.ekButonDegeri || 'extra';
   return showModal({
     html: `
       <div class="cm-baslik">${baslik}</div>
       <div class="cm-icerik">${mesaj}</div>
       <div class="cm-butonlar">
         <button class="buton grimsi cm-iptal">İptal</button>
+        ${ekButonEtiketi ? `<button class="buton grimsi cm-ek">${ekButonEtiketi}</button>` : ''}
         <button class="buton cm-onayla">Onayla</button>
       </div>`,
     escValue: false,
     bagla(kutu, kapat) {
-      kutu.querySelector('.cm-onayla').onclick = () => kapat(true);
-      kutu.querySelector('.cm-iptal').onclick = () => kapat(false);
+      const onaylaBtn = kutu.querySelector('.cm-onayla');
+      const iptalBtn = kutu.querySelector('.cm-iptal');
+      const ekBtn = kutu.querySelector('.cm-ek');
+      onaylaBtn.onclick = (e) => kapat(e.shiftKey ? "shift5" : true);
+      iptalBtn.onclick = () => kapat(false);
+      if (ekBtn) ekBtn.onclick = () => kapat(ekButonDegeri);
+      setTimeout(() => onaylaBtn.focus(), 50);
+      const enterHandler = (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          kapat(e.shiftKey ? "shift5" : true);
+        }
+      };
+      document.addEventListener('keydown', enterHandler);
+      return () => document.removeEventListener('keydown', enterHandler);
     }
   });
 }

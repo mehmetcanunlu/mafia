@@ -33,6 +33,8 @@ let aktifSagSekme = "detay";
 let sonSeciliBolgeId = null;
 let arastirmaSayfaAcik = false;
 let arastirmaSayfaFiltre = "tum";
+let arastirmaSayfaScrollTop = 0;
+const arastirmaDalScrollLeft = new Map();
 let aktifCallbacklar = null;
 const ISTANBUL_VIEWBOX = Object.freeze({
   x: 0,
@@ -789,7 +791,7 @@ function arastirmaSayfaIcerikHTML() {
     if (arastirmaSayfaFiltre !== "tum" && arastirmaSayfaFiltre !== dalId) return;
     const durum = ar[dalId] || { seviye: 0, puan: 0 };
     const aktif = dalId === aktifDalId;
-    html += `<section class="arastirma-matris-dal ${aktif ? "aktif" : ""}">
+    html += `<section class="arastirma-matris-dal ${aktif ? "aktif" : ""}" data-dal="${dalId}">
       <div class="arastirma-matris-sol">
         <div class="arastirma-dal-ad">${dal.ikon} ${dal.ad}</div>
         <div class="arastirma-dal-acik">${dal.aciklama}</div>
@@ -831,7 +833,23 @@ function arastirmaSayfaGuncel() {
   ensureArastirmaSayfa();
   const govde = document.getElementById("arastirma-sayfa-govde");
   if (!govde) return;
+
+  arastirmaSayfaScrollTop = govde.scrollTop;
+  govde.querySelectorAll(".arastirma-matris-dal").forEach((dalEl) => {
+    const dalId = dalEl.getAttribute("data-dal");
+    const sag = dalEl.querySelector(".arastirma-matris-sag");
+    if (!dalId || !sag) return;
+    arastirmaDalScrollLeft.set(dalId, sag.scrollLeft);
+  });
+
   govde.innerHTML = arastirmaSayfaIcerikHTML();
+  govde.scrollTop = arastirmaSayfaScrollTop;
+  govde.querySelectorAll(".arastirma-matris-dal").forEach((dalEl) => {
+    const dalId = dalEl.getAttribute("data-dal");
+    const sag = dalEl.querySelector(".arastirma-matris-sag");
+    if (!dalId || !sag) return;
+    sag.scrollLeft = arastirmaDalScrollLeft.get(dalId) || 0;
+  });
 
   govde.querySelectorAll(".btn-arastirma-sayfa-dal").forEach((btn) => {
     btn.onclick = () => {
@@ -935,6 +953,7 @@ export function durumCiz() {
   &nbsp; | &nbsp; <span class="etiket" title="${netGelir.detay.replace(/"/g, "&quot;")}">Net:</span> <span title="${netGelir.detay.replace(/"/g, "&quot;")}">${netGelir.net}</span>
   &nbsp; | &nbsp; <button class="buton grimsi" id="pause-btn">${oyun.duraklat ? "Devam Et" : "Duraklat"
     }</button>
+  &nbsp; <button class="buton grimsi" id="tutorial-btn">📘 Tutorial</button>
   &nbsp; <button class="buton grimsi" id="arastirma-sayfa-btn">Araştırma</button>
   &nbsp; <button class="buton" id="ayarlar-btn">Ayarlar</button>
 `;
@@ -1327,6 +1346,12 @@ export function uiGuncel(cb) {
   // Pause bağla
   const pauseBtn = document.getElementById("pause-btn");
   if (pauseBtn) pauseBtn.onclick = cb.duraklatDevam;
+  const tutorialBtn = document.getElementById("tutorial-btn");
+  if (tutorialBtn) {
+    tutorialBtn.onclick = () => {
+      document.dispatchEvent(new CustomEvent("tutorial:open"));
+    };
+  }
 
   // Ayarlar modalı hazırla + bağla
   ensureAyarModal();
@@ -1354,6 +1379,7 @@ export function uiGuncel(cb) {
   }
 
   if (arastirmaSayfaAcik) arastirmaSayfaGuncel();
+  document.dispatchEvent(new CustomEvent("ui:guncel"));
 }
 
 export function detayCiz() {
