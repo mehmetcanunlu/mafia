@@ -701,24 +701,22 @@ export async function saldiriHizliAcil(hedefId) {
     .filter((b) => b.owner === "biz")
     .map((b) => ({ b, y: yiginBul(b.id, "biz") || { adet: 0 } }))
     .filter((x) => x.y.adet > 0);
-
-  const liste = kaynaklar
-    .map((x) => `${x.b.id}:${x.b.ad}(${x.y.adet})`)
-    .join(", ");
-  const sec = await showPrompt(
-    `Kaynak bölge ID'sini gir:\n${liste}`,
-    'Hızlı Saldırı — Kaynak Seç'
-  );
-  if (sec === null) return;
-  const kaynakId = parseInt(sec.split(":")[0], 10);
-  const kay = kaynaklar.find((x) => x.b.id === kaynakId);
+  const adaylar = kaynaklar
+    .map((x) => ({ ...x, rota: kisaRota(x.b.id, hedef.id) }))
+    .filter((x) => x.rota && x.rota.length >= 2);
+  adaylar.sort((a, b) => {
+    const rotaFark = (a.rota?.length || 999) - (b.rota?.length || 999);
+    if (rotaFark !== 0) return rotaFark;
+    return (b.y?.adet || 0) - (a.y?.adet || 0);
+  });
+  const kay = adaylar[0];
   if (!kay) {
-    await showAlert("Geçersiz kaynak.");
+    await showAlert("Bu hedefe saldırabilecek uygun kaynak bölge yok.");
     return;
   }
 
   const adetStr = await showPrompt(
-    `Kaç adam?\nMevcut: ${kay.y.adet}`,
+    `Kaynak: ${kay.b.ad} (ID:${kay.b.id})\nKaç adam?\nMevcut: ${kay.y.adet}`,
     'Hızlı Saldırı — Birlik Sayısı'
   );
   if (adetStr === null) return;
@@ -728,7 +726,7 @@ export async function saldiriHizliAcil(hedefId) {
     return;
   }
 
-  const rota = kisaRota(kay.b.id, hedef.id);
+  const rota = kay.rota || kisaRota(kay.b.id, hedef.id);
   if (!rota || rota.length < 2) {
     await showAlert("Rota bulunamadı.");
     return;
@@ -805,13 +803,41 @@ export async function birimSatinAl(tip) {
     return;
   }
 
-  oyun.fraksiyon.biz.para -= maliyet;
+  const onay = await showConfirm(
+    `${b.ad} bölgesine ${bilgi.ikon} ${bilgi.ad} al.\nMaliyet: ${maliyet} ₺\nİpucu: Shift + Onay = 5 adet`,
+    "Birim Satın Al",
+    { ekButonEtiketi: "Miktar Gir", ekButonDegeri: "miktar" }
+  );
+  if (!onay) return;
+
+  let adet = onay === "shift5" ? 5 : 1;
+  if (onay === "miktar") {
+    const miktar = await showPrompt(
+      `${bilgi.ikon} ${bilgi.ad} için adet gir:`,
+      "Miktar Gir",
+      "1"
+    );
+    if (miktar === null) return;
+    const parsed = Number(miktar);
+    if (!Number.isFinite(parsed) || parsed <= 0 || !Number.isInteger(parsed)) {
+      await showAlert("Geçerli bir tam sayı gir (1, 2, 3...).");
+      return;
+    }
+    adet = parsed;
+  }
+  const toplamMaliyet = maliyet * adet;
+  if (oyun.fraksiyon.biz.para < toplamMaliyet) {
+    await showAlert(`Yetersiz para. ${adet} adet için gerekli: ${toplamMaliyet} ₺`);
+    return;
+  }
+
+  oyun.fraksiyon.biz.para -= toplamMaliyet;
 
   // Birim oluştur
   const yeniBirim = {
     id: `k${++oyun.birimSayac}`,
     owner: "biz",
-    adet: 1,
+    adet,
     tip,
     konumId: b.id,
     hedefId: null,
@@ -828,7 +854,7 @@ export async function birimSatinAl(tip) {
   }
 
   oyun.birimler.push(yeniBirim);
-  logYaz(`${bilgi.ikon} ${bilgi.ad} satın alındı → ${b.ad}.`);
+  logYaz(`${bilgi.ikon} ${bilgi.ad} x${adet} satın alındı → ${b.ad}.`);
   uiGuncel(callbacklar);
 }
 
@@ -848,15 +874,37 @@ export async function tasitSatinAl(tip) {
     return;
   }
   const onay = await showConfirm(
-    `${b.ad} bölgesine ${bilgi.ikon} ${bilgi.ad} al.\nMaliyet: ${bilgi.maliyet} ₺\nKapasite: +${bilgi.kapasite}`,
-    "Taşıt Satın Al"
+    `${b.ad} bölgesine ${bilgi.ikon} ${bilgi.ad} al.\nMaliyet: ${bilgi.maliyet} ₺\nKapasite: +${bilgi.kapasite}\nİpucu: Shift + Onay = 5 adet`,
+    "Taşıt Satın Al",
+    { ekButonEtiketi: "Miktar Gir", ekButonDegeri: "miktar" }
   );
   if (!onay) return;
 
-  oyun.fraksiyon.biz.para -= bilgi.maliyet;
+  let adet = onay === "shift5" ? 5 : 1;
+  if (onay === "miktar") {
+    const miktar = await showPrompt(
+      `${bilgi.ikon} ${bilgi.ad} için adet gir:`,
+      "Miktar Gir",
+      "1"
+    );
+    if (miktar === null) return;
+    const parsed = Number(miktar);
+    if (!Number.isFinite(parsed) || parsed <= 0 || !Number.isInteger(parsed)) {
+      await showAlert("Geçerli bir tam sayı gir (1, 2, 3...).");
+      return;
+    }
+    adet = parsed;
+  }
+  const toplamMaliyet = bilgi.maliyet * adet;
+  if (oyun.fraksiyon.biz.para < toplamMaliyet) {
+    await showAlert(`Yetersiz para. ${adet} adet için gerekli: ${toplamMaliyet} ₺`);
+    return;
+  }
+
+  oyun.fraksiyon.biz.para -= toplamMaliyet;
   const tasit = bolgeTasitDurumu(b);
-  tasit[tip] = (tasit[tip] || 0) + 1;
-  logYaz(`${b.ad} bölgesine ${bilgi.ikon} ${bilgi.ad} alındı.`);
+  tasit[tip] = (tasit[tip] || 0) + adet;
+  logYaz(`${b.ad} bölgesine ${bilgi.ikon} ${bilgi.ad} x${adet} alındı.`);
   uiGuncel(callbacklar);
 }
 

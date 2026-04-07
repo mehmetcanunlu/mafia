@@ -33,6 +33,8 @@ let aktifSagSekme = "detay";
 let sonSeciliBolgeId = null;
 let arastirmaSayfaAcik = false;
 let arastirmaSayfaFiltre = "tum";
+let arastirmaSayfaScrollTop = 0;
+const arastirmaDalScrollLeft = new Map();
 let aktifCallbacklar = null;
 const ISTANBUL_VIEWBOX = Object.freeze({
   x: 0,
@@ -831,7 +833,23 @@ function arastirmaSayfaGuncel() {
   ensureArastirmaSayfa();
   const govde = document.getElementById("arastirma-sayfa-govde");
   if (!govde) return;
+
+  arastirmaSayfaScrollTop = govde.scrollTop;
+  govde.querySelectorAll(".arastirma-matris-dal").forEach((dalEl) => {
+    const dalId = dalEl.getAttribute("data-dal");
+    const sag = dalEl.querySelector(".arastirma-matris-sag");
+    if (!dalId || !sag) return;
+    arastirmaDalScrollLeft.set(dalId, sag.scrollLeft);
+  });
+
   govde.innerHTML = arastirmaSayfaIcerikHTML();
+  govde.scrollTop = arastirmaSayfaScrollTop;
+  govde.querySelectorAll(".arastirma-matris-dal").forEach((dalEl) => {
+    const dalId = dalEl.getAttribute("data-dal");
+    const sag = dalEl.querySelector(".arastirma-matris-sag");
+    if (!dalId || !sag) return;
+    sag.scrollLeft = arastirmaDalScrollLeft.get(dalId) || 0;
+  });
 
   govde.querySelectorAll(".btn-arastirma-sayfa-dal").forEach((btn) => {
     btn.onclick = () => {
