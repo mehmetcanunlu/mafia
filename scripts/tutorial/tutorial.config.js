@@ -10,8 +10,15 @@ export function tutorialAdimConfigOlustur(arastirmaDallari) {
     {
       baslik: "Haritaya genel bakış",
       icerik:
-        "Bu haritada bölgeleri seçer, yakınlaştırır ve duruma göre karar verirsin. İlk adımda bir bölge seçerek sağ paneli takip et.",
+        "Bu haritada bölgeleri seçer, yakınlaştırır ve sürükleyerek gezersin. İlk adımda bir bölge seçerek sağ paneli takip et.",
       hedefSecici: "#harita-kap",
+    },
+    {
+      baslik: "Harita modları",
+      icerik:
+        "Üstteki harita modu düğmeleri (1-4) ile siyasi, askeri, ekonomik ve lojistik görünümü değiştirirsin.",
+      hedefSecici: "#harita-mod-kontrol-ust",
+      hedefSeciciler: ["#harita-mod-kontrol-ust", ".harita-mod-btn"],
     },
     {
       baslik: "Bölge detay sekmesi",
@@ -25,9 +32,17 @@ export function tutorialAdimConfigOlustur(arastirmaDallari) {
     {
       baslik: "İşlemler sekmesi",
       icerik:
-        "İşlemler kısmında yatırım, birlik satın alma, hareket emri ve saldırı komutları bulunur.",
+        "İşlemler kısmında yatırım, birlik satın alma, hareket emri, toplantı noktası ve saldırı komutları bulunur.",
       hedefSecici: "#islemler",
       hedefSeciciler: ['.sag-sekme[data-sekme="islemler"]', "#islemler"],
+      girisAksiyonu: "islemlerSekmesiAc",
+    },
+    {
+      baslik: "Toplantı noktası çağırma",
+      icerik:
+        "Önce bir bölgeyi '📍 Toplantı Noktası Yap' ile işaretle. Sonra '🚚 Toplantı Noktasına Çağır' komutu, lojistik yeterliyse uygun tüm bölgelerden birlikleri toplu olarak çağırır.",
+      hedefSecici: "#btn-toplanti-yap",
+      hedefSeciciler: ["#btn-toplanti-yap", "#btn-toplanti-cagir", "#islemler"],
       girisAksiyonu: "islemlerSekmesiAc",
     },
     {

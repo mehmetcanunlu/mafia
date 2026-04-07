@@ -5,7 +5,7 @@ import { showToast } from "../../src/modal.js";
 import { ARASTIRMA_DALLARI } from "../../src/research.js";
 import { tutorialAdimConfigOlustur } from "./tutorial.config.js";
 
-const TUTORIAL_STORAGE_KEY = "mafia_tutorial_tamamlandi_v3";
+const TUTORIAL_STORAGE_KEY = "mafia_tutorial_tamamlandi_v4";
 
 const tutorialDurum = {
   aktif: false,
@@ -367,7 +367,6 @@ function tutorialKonumTakibiBaslat(adet = 16, aralikMs = 80) {
 
 function tutorialArastirmaAdimScrollAyarla(kayit) {
   if (!kayit?.hedefSecici || !kayit.hedefSecici.startsWith(".arastirma-matris-dal")) return;
-  if (tutorialDurum.adim < 10) return;
   const govde = document.getElementById("arastirma-sayfa-govde");
   const hedef = document.querySelector(kayit.hedefSecici);
   if (!govde || !hedef) return;
