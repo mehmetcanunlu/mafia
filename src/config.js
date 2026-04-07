@@ -1,4 +1,13 @@
 import { rastgeleIsim } from "./utils.js";
+import { LIDER_HAVUZU, rastgeleLiderSecimi } from "./liderHavuzu.js";
+
+export {
+  LIDER_HAVUZU,
+  LIDER_KOKEN_AVATAR,
+  LIDER_KOKEN_MATRISI,
+  liderAvatarUrl,
+  liderlerArasiBaslangicIliski,
+} from "./liderHavuzu.js";
 // Zorluk ayarları + AI davranışı
 export const ZORLUK = {
   kolay: {
@@ -11,6 +20,7 @@ export const ZORLUK = {
     aiCooldownMin: 2,
     aiCooldownMax: 4,
     aiBribePref: 0.55,
+    aiDiploEsneklik: 0.12,
   },
   orta: {
     aiAttackChance: 0.55,
@@ -22,6 +32,7 @@ export const ZORLUK = {
     aiCooldownMin: 1,
     aiCooldownMax: 3,
     aiBribePref: 0.5,
+    aiDiploEsneklik: 0,
   },
   zor: {
     aiAttackChance: 0.65,
@@ -33,6 +44,7 @@ export const ZORLUK = {
     aiCooldownMin: 0,
     aiCooldownMax: 2,
     aiBribePref: 0.45,
+    aiDiploEsneklik: -0.12,
   },
 };
 
@@ -43,6 +55,33 @@ export const AYAR = {
   saldiriGuvenlikCarpani: 8,
   saldiriAdamCarpani: 2,
   birimBakimMaliyeti: 0.1, // Geriye dönük varsayılan; tip bazlı bakım units.js üzerinden hesaplanır
+};
+
+export const DIPLOMASI = {
+  ATESKES_SURESI: 5,
+  BARIS_SURESI: 15,
+  ITTIFAK_SURESI: 10,
+  ITTIFAK_MALIYETI: 300,
+  ITTIFAK_TUR_MALIYETI: 50,
+  TICARET_SURESI: 8,
+  TICARET_GELIR_BONUS: 0.08,
+  TICARET_MIN_SERMAYE: 250,
+  TICARET_BATMA_SANSI: 0.06,
+  TICARET_BATMA_PARA_ORANI: 0.2,
+  TICARET_BATMA_MIN_KAYIP: 70,
+  TICARET_BATMA_MAX_KAYIP: 320,
+  TICARET_BATMA_ILISKI_CEZASI: -10,
+  SABOTAJ_MALIYETI: 200,
+  IHANET_ITIBAR_KAYBI: 20,
+  GUC_ESIGI_KOALISYON: 0.5,
+  KOALISYON_SALDIRI_BONUS: 0.1,
+  ITTIFAK_SALDIRI_BONUS: 0.15,
+  TEHDIT_BEKLEME: 12,
+  ILISKI_HAFIZA_SOLMASI: 0.5,
+  GERILIM_CURUMESI: 1,
+  SAVAS_CURUMESI: 2,
+  SAVAS_SALDIRI_BONUS: 0.05,
+  IHANET_SALDIRI_CEZA: 0.10,
 };
 
 export const MEKANIK = {
@@ -61,14 +100,7 @@ export const MEKANIK = {
 };
 
 // === LİDERLER ===
-export const LIDERLER = [
-  { ad: "Demir Yumruk", ozellik: "savasci", bonus: { saldiriGucu: 0.15 }, ikon: "⚔️" },
-  { ad: "Tilki", ozellik: "ekonomist", bonus: { gelirCarpani: 0.25 }, ikon: "💰" },
-  { ad: "Doktor", ozellik: "tedavici", bonus: { regenBonus: 0.05 }, ikon: "🏥" },
-  { ad: "Mimar", ozellik: "yapici", bonus: { binaMaliyetiIndirim: 0.15 }, ikon: "🏗️" },
-  { ad: "Hayalet", ozellik: "gizlici", bonus: { kayipAzaltma: 0.15 }, ikon: "👻" },
-  { ad: "Patron", ozellik: "rekrutcu", bonus: { adamCarpani: 0.20 }, ikon: "👔" },
-];
+export const LIDERLER = LIDER_HAVUZU;
 
 // === BÖLGE ÖZELLİKLERİ ===
 // gelirBonus: para geliri çarpanı  | uretimBonus: adam üretim çarpanı
@@ -194,30 +226,34 @@ const ISIMLER = [
 // Başlangıç fraksiyonları (zorluk etkili)
 export function BASLANGIC_FRAKSIYONLAR(zorluk) {
   const z = ZORLUK[zorluk];
-  // Her fraksiyona rastgele lider ata
-  const shuffled = [...LIDERLER].sort(() => Math.random() - 0.5);
+  // Her oyun için 100 kişilik havuzdan benzersiz lider seç
+  const secilen = rastgeleLiderSecimi(4);
+  const [bizLider, ai1Lider, ai2Lider, ai3Lider] = secilen;
   return {
-    biz: { id: "biz", ad: "Biz", havuz: 20, para: 600, lider: shuffled[0] },
+    biz: { id: "biz", ad: "Biz", havuz: 20, para: 600, lider: bizLider || LIDERLER[0], tasit: { araba: 6, motor: 10 } },
     ai1: {
       id: "ai1",
       ad: rastgeleIsim(),
       havuz: 28 + (z.aiStartHavuz || 0),
       para: 650 + (z.aiStartPara || 0),
-      lider: shuffled[1],
+      lider: ai1Lider || LIDERLER[1],
+      tasit: { araba: 4, motor: 8 },
     },
     ai2: {
       id: "ai2",
       ad: rastgeleIsim(),
       havuz: 26 + (z.aiStartHavuz || 0),
       para: 650 + (z.aiStartPara || 0),
-      lider: shuffled[2],
+      lider: ai2Lider || LIDERLER[2],
+      tasit: { araba: 4, motor: 8 },
     },
     ai3: {
       id: "ai3",
       ad: rastgeleIsim(),
       havuz: 24 + (z.aiStartHavuz || 0),
       para: 650 + (z.aiStartPara || 0),
-      lider: shuffled[3],
+      lider: ai3Lider || LIDERLER[3],
+      tasit: { araba: 4, motor: 8 },
     },
   };
 }
@@ -292,4 +328,59 @@ export const SOHRET = {
   buyInflationPerPoint: 0.015, // mevcut şöhret başına +%1.5 ek
   gainOnAttackWin: 4, // saldırı kazanırsan +4
   gainOnAttackLose: 1, // saldırı başarısızsa teselli +1
+};
+
+export const EKONOMI_DENGE = {
+  // Haraç seviyesi: gelir ↔ sadakat/asayiş dengesi
+  haracSeviyeleri: {
+    dusuk: {
+      ad: "Düşük",
+      gelirCarpani: 0.72,
+      sadakatDelta: 0.35,
+      suclulukDelta: -0.8,
+      polisDelta: -0.35,
+    },
+    orta: {
+      ad: "Orta",
+      gelirCarpani: 1.0,
+      sadakatDelta: 0,
+      suclulukDelta: 0.4,
+      polisDelta: 0.18,
+    },
+    yuksek: {
+      ad: "Yüksek",
+      gelirCarpani: 1.42,
+      sadakatDelta: -0.55,
+      suclulukDelta: 2.1,
+      polisDelta: 0.95,
+    },
+  },
+  haracGelirOrani: 0.18,
+  haracNufusCarpani: 0.018,
+  haracYatirimBonus: 0.08,
+  haracKrizSadakatEsigi: 38,
+  haracKrizPolisEtkisi: 1.2,
+  haracKrizSadakatDarbe: -0.7,
+
+  // Adam alımı limitleme
+  alimiTurBazKota: 4,
+  alimiTurBolgeKota: 1,
+  alimiTurSadakatBoleni: 25,
+  alimiTurPolisCezaEsik: 55,
+  alimiTurPolisCeza: 1,
+  alimiTurParaDestekEsik: 1200,
+  alimiTurParaDestekBonus: 1,
+  alimiTurParaCezaEsik: 220,
+  alimiTurParaCeza: 1,
+  toplamBirimTabanKapasite: 20,
+  toplamBirimBolgeCarpani: 8,
+  toplamBirimNufusCarpani: 0.07,
+  toplamBirimSadakatCarpani: 0.2,
+  toplamBirimMaksKapasite: 220,
+  alimiEkMaliyetKisiBasi: 8,
+  alimiEkMaliyetHaracCarpani: 0.35,
+  alimiSadakatEsik: 4,
+  alimiSadakatCezaKisiBasi: 0.22,
+  alimiSadakatYuksekHaracCarpani: 1.2,
+  alimiSadakatTaban: 20,
 };

@@ -1,4 +1,4 @@
-import { AYAR, ZORLUK, BOLGE_OZELLIKLERI, BINA_TIPLERI } from "./config.js";
+import { AYAR, ZORLUK, BOLGE_OZELLIKLERI, BINA_TIPLERI, EKONOMI_DENGE } from "./config.js";
 import { yeniOyun } from "./state.js";
 import {
   haritaCiz,
@@ -9,9 +9,17 @@ import {
   isimModalKapat,
   logYaz,
   bitisBanner,
+  profilSolMenuAcilisTalebiAyarla,
 } from "./ui.js";
 import { callbacklar, asayisTick } from "./actions.js";
-import { aiGelisimVeUretim, aiSaldiriHareket, aiArastirmaTick, aiCasuslukYap } from "./ai.js";
+import {
+  aiGelisimVeUretim,
+  aiSaldiriHareket,
+  aiArastirmaTick,
+  aiCasuslukYap,
+  aiKoordineliSaldiriDegerlendirYap,
+  aiIttifakMudahalesiBaslat,
+} from "./ai.js";
 import { sohretCarpani } from "./state.js";
 import { oyun, bolgeById } from "./state.js";
 import { savasKazanmaIhtimali } from "./combat.js";
@@ -22,48 +30,543 @@ import { gorevKontrol } from "./missions.js";
 import { savasAnimasyonu, elDegistirmeFlash, konvoyBaslaAnimasyonu } from "./animations.js";
 import { istatistikKaydet, istatistikGrafik } from "./stats.js";
 import { rastgeleIsim } from "./utils.js";
-import { showToast } from "./modal.js";
+import { showToast, showConfirm, showAlert } from "./modal.js";
 import { sesCal, sesDurumDegistir, sesAcikMi, muzikDurumDegistir, muzikAcikMi } from "./audio.js";
 import { oyunKaydet, oyunYukle, tumKayitlar, kayitSil, otomatikKaydet } from "./save.js";
 import { bolgeMapTemizle } from "./state.js";
 import { istatistikSifirla } from "./stats.js";
 import { egitimTick, motorluHizTick, BIRIM_TIPLERI, grupEfektifSavunma, ownerBakimToplami } from "./units.js";
 import { sadakatTick, fetihSonrasiSadakat } from "./loyalty.js";
-import { arastirmaTick, arastirmaEfekt } from "./research.js";
+import { arastirmaTick, arastirmaEfekt, arastirmaDurumunuDogrula } from "./research.js";
 import { liderDevreDisiMi } from "./spy.js";
-import { bolgeTasitIadeEt } from "./logistics.js";
+import { ownerTasitIade, bolgeFetihTasitGanmetiEkle } from "./logistics.js";
 import { tutorialArayuzKur, tutorialBaslat } from "../scripts/tutorial/tutorial.js";
+import {
+  diplomasiTick,
+  diplomasiSaldiriMumkunMu,
+  diplomasiFetihSonucu,
+  ittifakSaldiriCarpani,
+  savasIliskiModifiyeri,
+  isDostCete,
+  isDostIttifak,
+  diplomasiTeklifYanitla,
+  ittifakMudahaleKuyrugundanHazirOlanlariAl,
+} from "./diplomasi.js";
+
+let baslangicSecimModu = false;
+let bekleyenBaslangicKurulumu = null;
+let modalPopupKuyrugu = Promise.resolve();
 
 document.addEventListener("ui:guncel", () => {
   ensureGameControls();
 });
 
-/* --- YENİ: saldırı çözümü (toplu varan birlikler) --- */
-export function garnizonTemizleVeYiginaTasi() {
-  oyun.bolgeler.forEach((b) => {
-    const g = b.garnizon || 0;
-    if (
-      g > 0 &&
-      (b.owner === "biz" || b.owner === "ai1" || b.owner === "ai2" || b.owner === "ai3")
-    ) {
-      yiginaEkle(b.id, b.owner, g, b.baslangicBirimTipi || "tetikci");
+function konvoyTasitIade(konvoy) {
+  const araba = konvoy?.tasitAraba || 0;
+  const motor = konvoy?.tasitMotor || 0;
+  if (!konvoy || (araba <= 0 && motor <= 0)) return;
+  ownerTasitIade(konvoy.owner, araba, motor);
+}
+
+function operasyonKonvoylari(op) {
+  if (!op || !Array.isArray(op.katilimcilar)) return [];
+  const idler = new Set(
+    op.katilimcilar.flatMap((kat) => (Array.isArray(kat.konvoyIdler) ? kat.konvoyIdler : []))
+  );
+  return oyun.birimler.filter((k) => idler.has(k.id));
+}
+
+function diploPopupKuyrugaEkle(olay) {
+  if (!olay) return;
+  const metin = typeof olay === "string" ? olay : String(olay.metin || "").trim();
+  if (!metin) return;
+  const baslik = typeof olay === "object" ? (olay.baslik || "Diplomasi") : "Diplomasi";
+  popupKuyrugaEkle(async () => {
+    if (typeof olay === "object" && olay.teklifId) {
+      const kabul = await showConfirm(metin, baslik);
+      const sonuc = diplomasiTeklifYanitla(olay.teklifId, !!kabul);
+      if (sonuc?.mesaj && /(ittifak|koalisyon|m[üu]dahale|savaş)/i.test(sonuc.mesaj)) {
+        logYaz(`🤝 ${sonuc.mesaj}`);
+      }
+      uiGuncel(callbacklar);
+      return;
     }
-    // tamamen bitir:
-    delete b.garnizon;
+    await showAlert(metin, baslik);
   });
 }
 
-function konvoyTasitIade(konvoy, bolgeId) {
-  if (!konvoy || bolgeId === undefined || bolgeId === null) return;
-  const araba = konvoy.tasitAraba || 0;
-  const motor = konvoy.tasitMotor || 0;
-  if (araba <= 0 && motor <= 0) return;
-  bolgeTasitIadeEt(bolgeId, araba, motor);
+function popupKuyrugaEkle(gorev) {
+  if (typeof gorev !== "function") return;
+  modalPopupKuyrugu = modalPopupKuyrugu
+    .then(() => gorev())
+    .catch(() => undefined);
+}
+
+function ownerListesi(owner) {
+  if (Array.isArray(owner)) return owner.filter(Boolean);
+  return owner ? [owner] : [];
+}
+
+function ownerEtiketi(owner) {
+  const ownerler = ownerListesi(owner);
+  if (!ownerler.length) return "-";
+  return ownerler.map((id) => oyun.fraksiyon[id]?.ad || id).join(" + ");
+}
+
+function tamSayiPozitif(deger) {
+  return Math.max(0, Math.round(Number(deger) || 0));
+}
+
+function savasSonucPopupuGoster(detay) {
+  if (!detay || !detay.bolgeAd) return;
+  const saldiranOwnerler = ownerListesi(detay.saldiranOwner);
+  const savunanOwner = detay.savunanOwner || "";
+  const bizSaldirida = saldiranOwnerler.includes("biz");
+  const bizSavunmada = savunanOwner === "biz";
+  if (!bizSaldirida && !bizSavunmada) return;
+
+  const savunmaEkrani = bizSavunmada && !bizSaldirida;
+  const saldiriBasarili = !!detay.saldiriBasarili;
+  const kazanildi = savunmaEkrani ? !saldiriBasarili : saldiriBasarili;
+  const baslik = savunmaEkrani ? "Savunma Sonucu" : "Saldırı Sonucu";
+  const sonuc = kazanildi ? "KAZANILDI" : "KAYBEDILDI";
+  const durum = savunmaEkrani
+    ? (kazanildi ? "Dusman saldirisi puskurtuldu." : "Bolge dusman tarafindan ele gecirildi.")
+    : (kazanildi ? "Saldiri basarili, bolge ele gecirildi." : "Saldiri basarisiz, birlikler geri cekildi.");
+
+  const saldiranBaslangic = tamSayiPozitif(detay.saldiranBaslangic);
+  const saldiranKayip = tamSayiPozitif(detay.saldiranKayip);
+  const saldiranKalan = tamSayiPozitif(detay.saldiranKalan);
+  const savunanBaslangic = tamSayiPozitif(detay.savunanBaslangic);
+  const savunanKayip = tamSayiPozitif(detay.savunanKayip);
+  const savunanKalan = tamSayiPozitif(detay.savunanKalan);
+
+  const metin = [
+    `Bolge: ${detay.bolgeAd}`,
+    `Sonuc: ${sonuc}`,
+    `Durum: ${durum}`,
+    "",
+    `Saldiran (${ownerEtiketi(saldiranOwnerler)}): ${saldiranBaslangic} -> ${saldiranKalan} (Kayip: ${saldiranKayip})`,
+    `Savunan (${ownerEtiketi(savunanOwner)}): ${savunanBaslangic} -> ${savunanKalan} (Kayip: ${savunanKayip})`,
+    `Yeni sahip: ${ownerEtiketi(detay.yeniOwner)}`,
+  ].join("\n");
+
+  popupKuyrugaEkle(() => showAlert(metin, baslik));
+}
+
+function operasyonSerbestBirak(op, durum = "zaman_asimi", mesaj = "") {
+  operasyonKonvoylari(op).forEach((k) => {
+    k.bekliyor = false;
+    if (k.operasyonId === op.id) k.operasyonId = null;
+    if (k.durum === "bekliyor-op") k.durum = "hareket";
+  });
+  op.durum = durum;
+  if (mesaj) logYaz(mesaj);
+}
+
+function operasyonIttifakBozulduMu(op) {
+  if (!op || !Array.isArray(op.katilimcilar)) return false;
+  const ownerler = [...new Set(op.katilimcilar.map((kat) => kat?.owner).filter(Boolean))];
+  for (let i = 0; i < ownerler.length; i += 1) {
+    for (let j = i + 1; j < ownerler.length; j += 1) {
+      if (!isDostCete(ownerler[i], ownerler[j])) return true;
+    }
+  }
+  return false;
+}
+
+function zorlaGeriCek(k) {
+  if (!k || k.konumId === undefined || k.konumId === null) return;
+  const bulundugu = bolgeById(k.konumId);
+  if (!bulundugu) {
+    k._sil = true;
+    return;
+  }
+  const geriHedef = (oyun.komsu[bulundugu.id] || []).find((id) => bolgeById(id)?.owner === k.owner);
+  if (geriHedef != null) {
+    k.hedefId = geriHedef;
+    k.rota = [];
+    k._hazir = false;
+    k.bekliyor = false;
+    k.operasyonId = null;
+    k.durum = "hareket";
+    return;
+  }
+  k._sil = true;
+}
+
+function ittifakBozulduKontrol() {
+  oyun.birimler.forEach((k) => {
+    if (!k || k._sil || k.konumId === undefined || k.konumId === null) return;
+    if (k.hedefId) return;
+    const bolge = bolgeById(k.konumId);
+    if (!bolge || bolge.owner === "tarafsiz" || bolge.owner === k.owner) {
+      delete k._ittifakUyari;
+      return;
+    }
+    if (isDostIttifak(k.owner, bolge.owner)) {
+      delete k._ittifakUyari;
+      return;
+    }
+    k._ittifakUyari = (k._ittifakUyari || 0) + 1;
+    if (k._ittifakUyari === 1) {
+      logYaz(
+        `⚠️ ${oyun.fraksiyon[k.owner]?.ad || k.owner} birlikleri ${bolge.ad} bölgesinde ittifak dışı kaldı. 3 tur içinde geri çekilmeli.`
+      );
+    }
+    if (k._ittifakUyari >= 3) {
+      zorlaGeriCek(k);
+      logYaz(
+        `↩ ${oyun.fraksiyon[k.owner]?.ad || k.owner} birlikleri ${bolge.ad} bölgesinden zorla geri çekildi.`
+      );
+      delete k._ittifakUyari;
+    }
+  });
+}
+
+function ittifakMudahaleTick() {
+  const hazirMudahale = ittifakMudahaleKuyrugundanHazirOlanlariAl();
+  if (!hazirMudahale.length) return;
+  hazirMudahale.forEach((m) => {
+    const ok = aiIttifakMudahalesiBaslat(m.owner, m.savunulan, m.saldiran);
+    if (!ok && m.owner === "biz") {
+      logYaz("⚠️ İttifak müdahalesi için uygun birlik/lojistik bulunamadı.");
+    }
+  });
+}
+
+function operasyonTick() {
+  if (!Array.isArray(oyun.operasyonlar)) oyun.operasyonlar = [];
+
+  oyun.operasyonlar.forEach((op) => {
+    if (!op || (op.durum !== "hazirlik" && op.durum !== "saldirim")) return;
+    if (operasyonIttifakBozulduMu(op)) {
+      operasyonSerbestBirak(op, "iptal", "⚠️ Koordineli saldırı ittifak bozulduğu için iptal oldu.");
+      return;
+    }
+    if (op.durum !== "hazirlik") return;
+    const hedef = bolgeById(op.hedefId);
+    if (!hedef || !Array.isArray(op.katilimcilar) || !op.katilimcilar.length) {
+      op.durum = "iptal";
+      return;
+    }
+
+    if ((oyun.tur - (op.yaratildisTur || 0)) > (op.zaman_asimi || 8)) {
+      operasyonSerbestBirak(op, "zaman_asimi", "⏰ Koordineli saldırı zaman aşımına uğradı.");
+      return;
+    }
+
+    op.katilimcilar.forEach((kat) => {
+      const konvoylar = (kat.konvoyIdler || [])
+        .map((id) => oyun.birimler.find((k) => k.id === id))
+        .filter((k) => k && !k._sil && k.adet > 0);
+      if (!konvoylar.length) {
+        kat.hazir = false;
+        return;
+      }
+
+      let hazirSay = 0;
+      konvoylar.forEach((k) => {
+        if (!k.hedefId) k.hedefId = op.hedefId;
+        if (k.operasyonId !== op.id) k.operasyonId = op.id;
+        const komsuMuHedefe = (oyun.komsu[k.konumId] || []).includes(op.hedefId);
+        if (komsuMuHedefe) {
+          k.bekliyor = true;
+          k.durum = "bekliyor-op";
+          hazirSay += 1;
+        } else {
+          k.bekliyor = false;
+          if (k.durum === "bekliyor-op") k.durum = "hareket";
+        }
+      });
+
+      kat.hazir = hazirSay > 0;
+    });
+
+    const hepsiHazir = op.katilimcilar.every((kat) => kat.hazir);
+    if (!hepsiHazir) return;
+
+    op.katilimcilar.forEach((kat) => {
+      (kat.konvoyIdler || []).forEach((kid) => {
+        const k = oyun.birimler.find((b) => b.id === kid);
+        if (!k) return;
+        k.bekliyor = false;
+        if (k.durum === "bekliyor-op") k.durum = "hareket";
+      });
+    });
+    op.durum = "saldirim";
+    logYaz("⚔ Koordineli saldırı tetiklendi.");
+  });
+
+  oyun.operasyonlar.forEach((op) => {
+    if (!op || op.durum === "tamamlandi" || op.durum === "iptal" || op.durum === "zaman_asimi") return;
+    const kalan = operasyonKonvoylari(op).filter((k) => !k._sil && k.adet > 0);
+    if (!kalan.length) op.durum = "tamamlandi";
+  });
+
+  oyun.operasyonlar = oyun.operasyonlar.filter((op) => {
+    if (!op) return false;
+    if (op.durum === "tamamlandi" || op.durum === "iptal" || op.durum === "zaman_asimi") {
+      return (oyun.tur - (op.yaratildisTur || 0)) <= 2;
+    }
+    return true;
+  });
+}
+
+function koordineliSaldiriGrubu(k, varanlar) {
+  if (!k?.operasyonId) return [k];
+  return varanlar.filter(
+    (k2) =>
+      !k2._islendi &&
+      k2.operasyonId === k.operasyonId &&
+      k2.hedefId === k.hedefId &&
+      k2.owner !== "tarafsiz"
+  );
+}
+
+function efektifSaldiriGucu(k) {
+  const kayipAzaltma = liderDevreDisiMi(k.owner) ? 0 : liderBonus(k.owner, "kayipAzaltma");
+  const saldiriGucu = liderDevreDisiMi(k.owner) ? 0 : liderBonus(k.owner, "saldiriGucu");
+  const arastrSaldiri = k.owner === "biz" ? arastirmaEfekt("saldiriBonus") : 0;
+  const tipCarpani = BIRIM_TIPLERI[k.tip]?.saldiri || 1.0;
+  const efektif = Math.max(1, Math.round(k.adet * tipCarpani * (1 + saldiriGucu + arastrSaldiri)));
+  return { efektif, kayipAzaltma };
+}
+
+function kusatmaKontrol(hedefId, saldiranOwnerler) {
+  const ownerler = [...new Set((saldiranOwnerler || []).filter(Boolean))];
+  if (!ownerler.length) return false;
+  const komsular = oyun.komsu[hedefId] || [];
+  if (!komsular.length) return false;
+  return komsular.every((id) => {
+    const b = bolgeById(id);
+    if (!b) return false;
+    if (ownerler.includes(b.owner)) return true;
+    return ownerler.some((o) => isDostCete(o, b.owner));
+  });
+}
+
+function savunmaDurumuHesapla(hedef) {
+  const savunanBirimler = oyun.birimler.filter(
+    (x) => x.konumId === hedef.id && (x.owner === hedef.owner || isDostIttifak(x.owner, hedef.owner))
+  );
+  const birimAdet = savunanBirimler.reduce((t, x) => t + (x.adet || 0), 0);
+  const birimEfektif = grupEfektifSavunma(savunanBirimler);
+  return {
+    birimler: savunanBirimler,
+    toplamAdet: birimAdet,
+    efektif: Math.max(1, Math.round(birimEfektif)),
+  };
+}
+
+function savunmaKaybiUygula(hedef, savunanBirimler, kayipAdet) {
+  const kaynaklar = (savunanBirimler || [])
+    .filter((x) => x && !x._sil && (x.adet || 0) > 0)
+    .map((x) => ({ tur: "birim", ref: x, adet: x.adet || 0, kayip: 0 }));
+
+  const toplam = kaynaklar.reduce((t, k) => t + k.adet, 0);
+  if (toplam <= 0) return 0;
+  const hedefKayip = Math.min(toplam, Math.max(0, Math.round(kayipAdet || 0)));
+  if (hedefKayip <= 0) return 0;
+
+  kaynaklar.forEach((k) => {
+    k.kayip = Math.min(k.adet, Math.floor((k.adet / toplam) * hedefKayip));
+  });
+  let atanan = kaynaklar.reduce((t, k) => t + k.kayip, 0);
+  while (atanan < hedefKayip) {
+    const aday = [...kaynaklar]
+      .filter((k) => k.kayip < k.adet)
+      .sort((a, b) => (b.adet - b.kayip) - (a.adet - a.kayip))[0];
+    if (!aday) break;
+    aday.kayip += 1;
+    atanan += 1;
+  }
+
+  kaynaklar.forEach((k) => {
+    if (k.kayip <= 0) return;
+    k.ref.adet = Math.max(0, (k.ref.adet || 0) - k.kayip);
+    if (k.ref.adet <= 0) k.ref._sil = true;
+  });
+  return atanan;
+}
+
+function koordineliSavasCoz(grup, hedef) {
+  if (!grup.length || !hedef) return;
+  const op = grup[0]?.operasyonId
+    ? oyun.operasyonlar.find((o) => o.id === grup[0].operasyonId)
+    : null;
+
+  const savunma = savunmaDurumuHesapla(hedef);
+  const savunanBirimler = savunma.birimler;
+  const savunan = savunma.efektif;
+  const savunmaBonus = bolgeOzellikBonus(hedef, "savunmaBonus") + binaBonus(hedef, "savunmaBonus");
+  let guv = (hedef.guv || 0) + (hedef.yGuv || 0) + savunmaBonus;
+
+  const farkliYonler = new Set(grup.map((g) => g.konumId)).size;
+  if (farkliYonler >= 2) {
+    guv *= 0.5;
+    logYaz("⚔⚔ Makas hareketi! Savunma yarıya düştü.");
+  }
+
+  const toplamAdet = Math.max(1, grup.reduce((t, g) => t + (g.adet || 0), 0));
+  const efektifler = grup.map((g) => ({
+    konvoy: g,
+    ...efektifSaldiriGucu(g),
+  }));
+  let toplamEfektif = efektifler.reduce((t, e) => t + e.efektif, 0);
+
+  const ortDiplo = grup.reduce((t, g) => t + ittifakSaldiriCarpani(g.owner, hedef.owner), 0) / grup.length;
+  const ortIliskiCarpani = grup.reduce(
+    (t, g) => t + savasIliskiModifiyeri(g.owner, hedef.owner).saldiriCarpani,
+    0
+  ) / grup.length;
+  toplamEfektif = Math.round(toplamEfektif * Math.max(1, ortDiplo) * Math.max(0.5, ortIliskiCarpani) * 1.15);
+  const p = savasKazanmaIhtimali(Math.max(1, toplamEfektif), savunan, Math.max(0, guv));
+  const kazandi = Math.random() < p;
+
+  const oncekiOwner = hedef.owner;
+  const saldiranOwnerler = [...new Set(grup.map((g) => g.owner).filter(Boolean))];
+  const kayipAzaltmaOrtalama =
+    efektifler.reduce((t, e) => t + (e.kayipAzaltma || 0) * ((e.konvoy.adet || 0) / toplamAdet), 0);
+
+  if (kazandi) {
+    const atkKayipOran = Math.max(0.12, (0.32 + Math.random() * 0.14) - kayipAzaltmaOrtalama);
+    const atkKayipToplam = Math.round(toplamAdet * atkKayipOran);
+    const savunanToplam = savunma.toplamAdet;
+    const kusatma = kusatmaKontrol(hedef.id, grup.map((g) => g.owner));
+    const defKalan = kusatma ? 0 : Math.round(savunanToplam * (0.1 + Math.random() * 0.1));
+    if (kusatma) logYaz("🧱 Kuşatma! Savunma kaçış hattı kapandı.");
+
+    const captureOwner = op?.baslatanOwner || grup[0].owner;
+    hedef.owner = captureOwner;
+    const tasitGanmeti = bolgeFetihTasitGanmetiEkle(hedef, captureOwner);
+    fetihSonrasiSadakat(hedef.id);
+    diplomasiFetihSonucu(captureOwner, oncekiOwner, hedef.id);
+    savunanBirimler.forEach((x) => (x._sil = true));
+
+    let kacisId = null;
+    (oyun.komsu[hedef.id] || []).forEach((id) => {
+      if (kacisId !== null) return;
+      const bb = bolgeById(id);
+      if (bb && bb.owner === oncekiOwner) kacisId = id;
+    });
+    if (defKalan > 0 && kacisId != null) {
+      oyun.birimler.push({
+        id: `k${++oyun.birimSayac}`,
+        owner: oncekiOwner,
+        adet: defKalan,
+        konumId: hedef.id,
+        hedefId: kacisId,
+        _hazir: false,
+        durum: "hareket",
+        rota: [],
+        gecisHakki: false,
+        operasyonId: null,
+        bekliyor: false,
+      });
+    }
+
+    efektifler.forEach((e) => {
+      const kg = e.konvoy;
+      const oran = (kg.adet || 0) / toplamAdet;
+      const kgKayip = Math.round(atkKayipToplam * oran);
+      const kalan = Math.max(0, (kg.adet || 0) - kgKayip);
+      if (kalan > 0) {
+        yiginaEkle(hedef.id, kg.owner, kalan, kg.tip || "tetikci", { tavanUygula: false });
+      }
+      konvoyTasitIade(kg);
+      kg._islendi = true;
+      kg._sil = true;
+    });
+
+    if (captureOwner === "biz") {
+      oyun.istatistikler.kazanilanSavaslar++;
+      oyun.istatistikler.fetihler++;
+      if ((tasitGanmeti.araba || 0) > 0 || (tasitGanmeti.motor || 0) > 0) {
+        logYaz(`🚚 Bölge stoku ele geçirildi: +${tasitGanmeti.araba || 0} 🚗, +${tasitGanmeti.motor || 0} 🏍️`);
+      }
+      showToast(`🏴 ${hedef.ad} koordineli operasyonla fethedildi!`, "basari", 3500);
+      sesCal("fetih");
+    } else if (oncekiOwner === "biz") {
+      showToast(`⚠️ ${hedef.ad} kaybedildi!`, "hata", 3500);
+      sesCal("kayip-bolge");
+    } else {
+      sesCal("savas");
+    }
+    logYaz(`⚔ Koordineli saldırı başarılı: ${hedef.ad} ele geçirildi.`);
+    savasAnimasyonu(hedef.id, "fetih", atkKayipToplam);
+    elDegistirmeFlash(hedef.id);
+    savasSonucPopupuGoster({
+      bolgeAd: hedef.ad,
+      saldiranOwner: saldiranOwnerler,
+      savunanOwner: oncekiOwner,
+      saldiriBasarili: true,
+      saldiranBaslangic: toplamAdet,
+      saldiranKayip: atkKayipToplam,
+      saldiranKalan: toplamAdet - atkKayipToplam,
+      savunanBaslangic: savunanToplam,
+      savunanKayip: savunanToplam - defKalan,
+      savunanKalan: defKalan,
+      yeniOwner: hedef.owner,
+    });
+    return;
+  }
+
+  const atkKayipOran = Math.max(0.2, (0.48 + Math.random() * 0.16) - kayipAzaltmaOrtalama);
+  const atkKayipToplam = Math.round(toplamAdet * atkKayipOran);
+  const defKayipHedef = Math.round(savunma.toplamAdet * (0.22 + Math.random() * 0.2));
+  const defKayipUygulandi = savunmaKaybiUygula(hedef, savunanBirimler, defKayipHedef);
+
+  efektifler.forEach((e) => {
+    const kg = e.konvoy;
+    const oran = (kg.adet || 0) / toplamAdet;
+    const kgKayip = Math.round(atkKayipToplam * oran);
+    const kalan = Math.max(0, (kg.adet || 0) - kgKayip);
+    if (kalan > 0) {
+      const kacis = (oyun.komsu[hedef.id] || []).find((id) => bolgeById(id)?.owner === kg.owner);
+      if (kacis != null) {
+        yiginaEkle(kacis, kg.owner, kalan, kg.tip || "tetikci", { tavanUygula: false });
+        konvoyTasitIade(kg);
+      } else {
+        konvoyTasitIade(kg);
+      }
+    } else {
+      konvoyTasitIade(kg);
+    }
+    kg._islendi = true;
+    kg._sil = true;
+  });
+
+  logYaz(`⚔ Koordineli saldırı püskürtüldü: ${hedef.ad}.`);
+  sesCal("savas");
+  savasAnimasyonu(hedef.id, "puskurtme", atkKayipToplam);
+  savasSonucPopupuGoster({
+    bolgeAd: hedef.ad,
+    saldiranOwner: saldiranOwnerler,
+    savunanOwner: oncekiOwner,
+    saldiriBasarili: false,
+    saldiranBaslangic: toplamAdet,
+    saldiranKayip: atkKayipToplam,
+    saldiranKalan: toplamAdet - atkKayipToplam,
+    savunanBaslangic: savunma.toplamAdet,
+    savunanKayip: defKayipUygulandi,
+    savunanKalan: savunma.toplamAdet - defKayipUygulandi,
+    yeniOwner: hedef.owner,
+  });
 }
 
 function hareketTick() {
   // 0) Yeni oluşturulan konvoyları işaretle — aynı turda hedefe varmasın
   oyun.birimler.forEach((k) => {
+    if (!Array.isArray(k.rota)) k.rota = [];
+    if (k.hedefId && k.rota.length > 0) {
+      const komsular = oyun.komsu[k.konumId] || [];
+      if (!komsular.includes(k.hedefId) && komsular.includes(k.rota[0])) {
+        k.hedefId = k.rota.shift();
+      } else if (k.rota[0] === k.hedefId) {
+        k.rota.shift();
+      }
+    }
     if (!k._hazir) {
       // ilk kez görüyorsak, bir tur sonra hazır hale gelecek
       k._hazir = true;
@@ -71,73 +574,110 @@ function hareketTick() {
     }
   });
   // 1) Hedefine ulaşmaya hazır konvoyları bul
-  const varanlar = oyun.birimler.filter((k) => k._hazir && k.hedefId);
+  const varanlar = oyun.birimler.filter((k) => k._hazir && k.hedefId && !k.bekliyor);
 
   // 2) Her konvoy için işlem
   for (const k of varanlar) {
+    if (k._islendi) continue;
     const hedef = bolgeById(k.hedefId);
     if (!hedef) {
-      konvoyTasitIade(k, k.konumId);
+      konvoyTasitIade(k);
       k._sil = true;
       continue;
     }
 
-    // --- HEDEF DOST VEYA TARAFSIZ ---
-    if (hedef.owner === "tarafsiz" || hedef.owner === k.owner) {
-      yiginaEkle(hedef.id, k.owner, k.adet);
-      konvoyTasitIade(k, hedef.id);
+    if (hedef.owner !== "tarafsiz" && hedef.owner !== k.owner && isDostCete(k.owner, hedef.owner)) {
+      const rotaVar = Array.isArray(k.rota) && k.rota.length > 0;
+      if (k.gecisHakki && rotaVar) {
+        k.konumId = k.hedefId;
+        k.hedefId = k.rota.shift() || null;
+        k._hazir = false;
+        k.durum = "hareket";
+        continue;
+      }
+      if (isDostIttifak(k.owner, hedef.owner)) {
+        if (rotaVar) {
+          k.konumId = k.hedefId;
+          k.hedefId = k.rota.shift() || null;
+          k._hazir = false;
+          k.durum = "hareket";
+          continue;
+        }
+        yiginaEkle(hedef.id, k.owner, k.adet, k.tip || "tetikci", { tavanUygula: false });
+        konvoyTasitIade(k);
+        logYaz(`${oyun.fraksiyon[k.owner]?.ad || k.owner} birlikleri ittifak geçişiyle ${hedef.ad} bölgesine ulaştı.`);
+        k._sil = true;
+        continue;
+      }
+      if (rotaVar) {
+        k.konumId = k.hedefId;
+        k.hedefId = k.rota.shift() || null;
+        k._hazir = false;
+        k.durum = "hareket";
+        continue;
+      }
+      yiginaEkle(k.konumId, k.owner, k.adet, k.tip || "tetikci", { tavanUygula: false });
+      konvoyTasitIade(k);
+      logYaz(`${oyun.fraksiyon[k.owner]?.ad || k.owner} birlikleri dostluk geçişinde ${hedef.ad} bölgesinde kalamadı.`);
       k._sil = true;
       continue;
     }
 
-    // --- SALDIRI / HAREKET ---
-    // Eğer hedef bize aitse ve rota devam ediyorsa -> DURMA, DEVAM ET
-    if (hedef.owner === k.owner && k.rota && k.rota.length > 0) {
-      // Bir sonraki adıma geç
-      k.konumId = k.hedefId;
-      k.hedefId = k.rota.shift();
-      k._hazir = false; // bu tur hareket etti, gelecek tur varacak
-      // Log yazmaya gerek yok, transit geçiş
-      continue;
-    }
-
-    // Eğer hedef bize aitse ve rota bittiyse -> YERLEŞ
+    // --- HEDEF KENDİ BÖLGEMİZ ---
     if (hedef.owner === k.owner) {
-      yiginaEkle(hedef.id, k.owner, k.adet);
-      konvoyTasitIade(k, hedef.id);
+      if (k.rota && k.rota.length > 0) {
+        k.konumId = k.hedefId;
+        k.hedefId = k.rota.shift();
+        k._hazir = false;
+        k.durum = "hareket";
+        continue;
+      }
+      yiginaEkle(hedef.id, k.owner, k.adet, k.tip || "tetikci", { tavanUygula: false });
+      konvoyTasitIade(k);
       logYaz(`${k.adet} birim ${hedef.ad} bölgesine ulaştı.`);
       k._sil = true;
       continue;
     }
 
-    // Tarafsız fakat rota var -> (Normalde tarafsıza transit geçmek için savaşmak gerekmez eğer geçiş izni varsa,
-    // ama bu oyunda geçiş izni yok. Tarafsız = Düşman değil ama geçilmez. 
-    // FAKAT oyuncu isteği: "en kısa yoldan git". Eğer tarafsız bölgeye varırsa ne olur?
-    // Oyun kuralı: Tarafsız bölgeye SADECE rüşvetle girilir. Savaşla girilmez (kodda engelli).
-    // Bu yüzden rota tarafsızdan geçemez. BFS while loop tarafsıza takılabilir.
-    // Şimdilik: Tarafsıza geldiyse durur.)
+    // --- TARAFSIZ BÖLGE ---
     if (hedef.owner === "tarafsiz") {
       logYaz("Tarafsız bölgeye çarpıldı, hareket durdu.");
-      konvoyTasitIade(k, k.konumId);
-      k._sil = true; // Yolda kaldı veya geri döndü
+      konvoyTasitIade(k);
+      k._sil = true;
       continue;
     }
 
     // Düşmansa -> SAVAŞ
+    if (!diplomasiSaldiriMumkunMu(k.owner, hedef.owner)) {
+      logYaz(
+        `${oyun.fraksiyon[k.owner]?.ad || k.owner} birlikleri ${hedef.ad} önünde ateşkes nedeniyle durdu.`
+      );
+      yiginaEkle(k.konumId, k.owner, k.adet, k.tip || "tetikci", { tavanUygula: false });
+      konvoyTasitIade(k);
+      k._sil = true;
+      continue;
+    }
+
     // ... Savaş kodu aynı kalır ...
     // SADECE: Savaş KAZANILIRSA ve rota varsa -> Devam etmeli mi?
-    // Genelde fetih sonrası garnizon bırakılır ve durulur. 
+    // Genelde fetih sonrası birlik bırakılır ve durulur.
     // Ama "yola devam et" emri varsa?
     // Şimdilik: Fetih yapıldıysa orada dursun. Rota iptal.
     // ÇÜNKÜ: Fetih sonrası orası bizim olur, bir sonraki tur devam etmek için yeni emir gerekir.
     // VEYA: main loop'ta "fetih sonrası kalanlar rotaya devam etsin" diyebiliriz.
     // Kodda savas cozumune bakalim.
 
+    const grup = koordineliSaldiriGrubu(k, varanlar);
+    if (grup.length > 1) {
+      koordineliSavasCoz(grup, hedef);
+      continue;
+    }
 
     // --- HEDEF DÜŞMAN: SAVAŞ ---
-    const savunanBirimler = oyun.birimler.filter((x) => x.konumId === hedef.id && x.owner === hedef.owner);
+    const savunma = savunmaDurumuHesapla(hedef);
+    const savunanBirimler = savunma.birimler;
     // Birim tipi çarpanı ile efektif savunma gücü
-    const savunan = grupEfektifSavunma(savunanBirimler);
+    const savunan = savunma.efektif;
 
     // Kale + bölge yapıları savunmada
     const savunmaBonus = bolgeOzellikBonus(hedef, "savunmaBonus") + binaBonus(hedef, "savunmaBonus");
@@ -149,7 +689,9 @@ function hareketTick() {
     const arastrSaldiri = k.owner === "biz" ? arastirmaEfekt("saldiriBonus") : 0;
     const tipCarpani = BIRIM_TIPLERI[k.tip]?.saldiri || 1.0;
     const efektifAdet = Math.round(k.adet * tipCarpani * (1 + saldiriGucu + arastrSaldiri));
-    const p = savasKazanmaIhtimali(efektifAdet, savunan, guv);
+    const diploCarpan = ittifakSaldiriCarpani(k.owner, hedef.owner);
+    const iliskiCarpan = savasIliskiModifiyeri(k.owner, hedef.owner).saldiriCarpani;
+    const p = savasKazanmaIhtimali(Math.round(efektifAdet * diploCarpan * iliskiCarpan), savunan, guv);
     const kazandi = Math.random() < p;
 
     if (kazandi) {
@@ -166,14 +708,13 @@ function hareketTick() {
       }
 
       const oncekiOwner = hedef.owner;
-      const savunanStackler = oyun.birimler.filter(
-        (x) => x.konumId === hedef.id && x.owner === oncekiOwner
-      );
-      const savunanToplam = savunanStackler.reduce(
-        (t, x) => t + (x.adet || 0), 0
-      );
+      const savunanToplam = savunma.toplamAdet;
 
-      const defKalan = Math.round(savunanToplam * (0.1 + Math.random() * 0.1));
+      let defKalan = Math.round(savunanToplam * (0.1 + Math.random() * 0.1));
+      if (kusatmaKontrol(hedef.id, [k.owner])) {
+        defKalan = 0;
+        logYaz("🧱 Kuşatma! Savunanlar kaçamadı.");
+      }
 
       // Esir oluştur (savunan kayıplarının %10'u)
       const esirAdet = Math.round((savunanToplam - defKalan) * 0.10);
@@ -183,8 +724,10 @@ function hareketTick() {
       }
 
       hedef.owner = k.owner;
+      const tasitGanmeti = bolgeFetihTasitGanmetiEkle(hedef, k.owner);
       fetihSonrasiSadakat(hedef.id);
-      savunanStackler.forEach((x) => (x._sil = true));
+      diplomasiFetihSonucu(k.owner, oncekiOwner, hedef.id);
+      savunanBirimler.forEach((x) => (x._sil = true));
 
       let kacisId = null;
       const komsularSavunan = oyun.komsu[hedef.id] || [];
@@ -197,20 +740,27 @@ function hareketTick() {
         oyun.birimler.push({
           id: `k${++oyun.birimSayac}`, owner: oncekiOwner, adet: defKalan,
           konumId: hedef.id, hedefId: kacisId, _hazir: false, durum: "hareket",
+          rota: [],
+          gecisHakki: false,
+          operasyonId: null,
+          bekliyor: false,
         });
         logYaz(`${hedef.ad} düştü; ${defKalan} kişi ${bolgeById(kacisId).ad} bölgesine kaçtı.`);
       } else if (defKalan > 0) {
         logYaz(`${hedef.ad} düştü; kaçacak yer yoktu, ${defKalan} kişi imha edildi.`);
       }
 
-      yiginaEkle(hedef.id, k.owner, kalanAtk);
-      konvoyTasitIade(k, hedef.id);
+      yiginaEkle(hedef.id, k.owner, kalanAtk, k.tip || "tetikci", { tavanUygula: false });
+      konvoyTasitIade(k);
       logYaz(`${hedef.ad} fethedildi! (${oncekiOwner} -> ${k.owner})`);
 
       // İstatistik güncelle + ses + toast
       if (k.owner === "biz") {
         oyun.istatistikler.kazanilanSavaslar++;
         oyun.istatistikler.fetihler++;
+        if ((tasitGanmeti.araba || 0) > 0 || (tasitGanmeti.motor || 0) > 0) {
+          logYaz(`🚚 Bölge stoku ele geçirildi: +${tasitGanmeti.araba || 0} 🚗, +${tasitGanmeti.motor || 0} 🏍️`);
+        }
         showToast(`🏴 ${hedef.ad} fethedildi!`, 'basari', 3500);
         sesCal("fetih");
       } else if (oncekiOwner === "biz") {
@@ -226,6 +776,19 @@ function hareketTick() {
       // === SAVAŞ ANİMASYONU: FETİH ===
       savasAnimasyonu(hedef.id, "fetih", atkKayip);
       elDegistirmeFlash(hedef.id);
+      savasSonucPopupuGoster({
+        bolgeAd: hedef.ad,
+        saldiranOwner: k.owner,
+        savunanOwner: oncekiOwner,
+        saldiriBasarili: true,
+        saldiranBaslangic: k.adet,
+        saldiranKayip: atkKayip,
+        saldiranKalan: kalanAtk,
+        savunanBaslangic: savunanToplam,
+        savunanKayip: savunanToplam - defKalan,
+        savunanKalan: defKalan,
+        yeniOwner: hedef.owner,
+      });
     } else {
       // saldırı başarısız
       const atkKayipOran = Math.max(0.2, (0.45 + Math.random() * 0.2) - kayipAzaltma);
@@ -243,23 +806,16 @@ function hareketTick() {
         oyun.esirler.push({ owner: k.owner, tutulan: hedef.owner, adet: esirAdet });
       }
 
-      const savunanlar = oyun.birimler.filter(
-        (x) => x.konumId === hedef.id && x.owner === hedef.owner
-      );
-      const defKayip = Math.round(savunan * (0.25 + Math.random() * 0.2));
-      savunanlar.forEach((x) => {
-        const oran = x.adet / savunan;
-        x.adet -= Math.round(defKayip * oran);
-        if (x.adet <= 0) x._sil = true;
-      });
+      const defKayipHedef = Math.round(savunma.toplamAdet * (0.25 + Math.random() * 0.2));
+      const defKayipUygulandi = savunmaKaybiUygula(hedef, savunanBirimler, defKayipHedef);
 
       if (kalan > 0) {
         const kacis = (oyun.komsu[hedef.id] || []).find(
           (id) => bolgeById(id)?.owner === k.owner
         );
         if (kacis) {
-          yiginaEkle(kacis, k.owner, kalan);
-          konvoyTasitIade(k, kacis);
+          yiginaEkle(kacis, k.owner, kalan, k.tip || "tetikci", { tavanUygula: false });
+          konvoyTasitIade(k);
         }
       }
       logYaz(`${hedef.ad} saldırısı püskürtüldü.`);
@@ -267,6 +823,19 @@ function hareketTick() {
 
       // === SAVAŞ ANİMASYONU: PÜSKÜRTME ===
       savasAnimasyonu(hedef.id, "puskurtme", atkKayip);
+      savasSonucPopupuGoster({
+        bolgeAd: hedef.ad,
+        saldiranOwner: k.owner,
+        savunanOwner: hedef.owner,
+        saldiriBasarili: false,
+        saldiranBaslangic: k.adet,
+        saldiranKayip: atkKayip,
+        saldiranKalan: kalan,
+        savunanBaslangic: savunma.toplamAdet,
+        savunanKayip: defKayipUygulandi,
+        savunanKalan: savunma.toplamAdet - defKayipUygulandi,
+        yeniOwner: hedef.owner,
+      });
     }
 
     k._sil = true;
@@ -274,6 +843,9 @@ function hareketTick() {
 
   // 3) Temizlik
   oyun.birimler = oyun.birimler.filter((k) => !k._sil && k.adet > 0);
+  oyun.birimler.forEach((k) => {
+    if (k._islendi) delete k._islendi;
+  });
 
   // 4) UI güncelle
   uiGuncel(callbacklar);
@@ -295,13 +867,138 @@ function dongu() {
 // rastgeleIsim artık utils.js'den geliyor, geriye dönük uyumluluk için re-export
 export { rastgeleIsim } from "./utils.js";
 
-function onBolgeSec(id) {
+function modalAyarlariniOku() {
+  const ad = (document.getElementById("isim-input")?.value || "").trim() || rastgeleIsim();
+  const ai1Ad = (document.getElementById("isim-ai1")?.value || "").trim() || rastgeleIsim();
+  const ai2Ad = (document.getElementById("isim-ai2")?.value || "").trim() || rastgeleIsim();
+  const ai3Ad = (document.getElementById("isim-ai3")?.value || "").trim() || rastgeleIsim();
+  const zor = document.getElementById("zorluk")?.value || "orta";
+  return {
+    zorluk: zor,
+    mapSize: "istanbul-buyuk",
+    fraksiyonAdlari: {
+      biz: ad,
+      ai1: ai1Ad,
+      ai2: ai2Ad,
+      ai3: ai3Ad,
+    },
+  };
+}
+
+function oyunKurulumunuBaslat(kurulum, seciliBaslangicId = null) {
+  if (!kurulum) return;
+  yeniOyun({
+    zorluk: kurulum.zorluk,
+    mapSize: kurulum.mapSize,
+    baslangicKonumlari: seciliBaslangicId ? { biz: seciliBaslangicId } : null,
+    fraksiyonAdlari: kurulum.fraksiyonAdlari,
+  });
+  baslangicSecimModu = false;
+  bekleyenBaslangicKurulumu = null;
+  isimModalKapat();
+
+  document.getElementById("efs-biz").textContent = oyun.fraksiyon.biz.ad;
+  document.getElementById("efs-ai1").textContent = oyun.fraksiyon.ai1.ad;
+  document.getElementById("efs-ai2").textContent = oyun.fraksiyon.ai2.ad;
+  document.getElementById("efs-ai3").textContent = oyun.fraksiyon.ai3.ad;
+
+  logYaz(
+    `Çete: "${oyun.fraksiyon.biz.ad}", zorluk: "${kurulum.zorluk.toUpperCase()}", harita: İstanbul (Büyük).`
+  );
+  if (seciliBaslangicId) {
+    const seciliBolge = bolgeById(seciliBaslangicId);
+    if (seciliBolge) logYaz(`📍 Başlangıç bölgesi seçildi: ${seciliBolge.ad}`);
+  }
+
+  durumCiz();
+  haritaCiz(onBolgeSec);
+  uiGuncel(callbacklar);
+  ensureGameControls();
+
+  oyun.duraklat = false;
+  durumCiz();
+  operasyonTick();
+  hareketTick();
+  setTimeout(() => tutorialBaslat(), 120);
+}
+
+function haritadanBaslangicSecimiBaslat() {
+  const kurulum = modalAyarlariniOku();
+  bekleyenBaslangicKurulumu = kurulum;
+  baslangicSecimModu = true;
+  yeniOyun({
+    zorluk: kurulum.zorluk,
+    mapSize: kurulum.mapSize,
+    fraksiyonAdlari: kurulum.fraksiyonAdlari,
+  });
+  isimModalKapat();
+  document.getElementById("efs-biz").textContent = oyun.fraksiyon.biz.ad;
+  document.getElementById("efs-ai1").textContent = oyun.fraksiyon.ai1.ad;
+  document.getElementById("efs-ai2").textContent = oyun.fraksiyon.ai2.ad;
+  document.getElementById("efs-ai3").textContent = oyun.fraksiyon.ai3.ad;
+  durumCiz();
+  haritaCiz(onBolgeSec);
+  uiGuncel(callbacklar);
+  showToast("Haritada başlangıç bölgeni tıkla.", "bilgi", 2800);
+  logYaz("📍 Başlangıç seçim modu: Haritadan bir bölge seç.");
+}
+
+async function haritadanBaslangicSecimiTamamla(id) {
+  const kurulum = bekleyenBaslangicKurulumu;
+  if (!kurulum) return;
+  const bolge = bolgeById(id);
+  if (!bolge) return;
+  const onay = await showConfirm(
+    `Başlangıç bölgen "${bolge.ad}" olsun mu?`,
+    "Başlangıç Bölgesi"
+  );
+  if (!onay) return;
+  oyunKurulumunuBaslat(kurulum, bolge.id);
+}
+
+async function onBolgeSec(id, secimOps = {}) {
+  const hedef = bolgeById(id);
+  if (!hedef) return;
+
+  if (baslangicSecimModu) {
+    await haritadanBaslangicSecimiTamamla(id);
+    return;
+  }
+
+  const oncekiSecili = bolgeById(oyun.seciliId);
+  if (
+    secimOps?.shiftKey &&
+    oncekiSecili &&
+    oncekiSecili.owner === "biz" &&
+    hedef.owner === "biz" &&
+    oncekiSecili.id !== hedef.id &&
+    !oyun.hareketEmri
+  ) {
+    profilSolMenuAcilisTalebiAyarla(null);
+    oyun.seciliId = oncekiSecili.id;
+    if (typeof callbacklar.hizliTransferSeciliBolgeden === "function") {
+      await callbacklar.hizliTransferSeciliBolgeden(hedef.id);
+      return;
+    }
+  }
+
+  if (secimOps?.dblclick && hedef.owner !== "biz" && hedef.owner !== "tarafsiz" && !oyun.hareketEmri) {
+    profilSolMenuAcilisTalebiAyarla(null);
+    oyun.seciliId = hedef.id;
+    await callbacklar.saldiriHizliAcil(hedef.id);
+    return;
+  }
+
   // Bekleyen hareket emri varsa tıklanan bölgeyi hedef olarak işle.
   if (oyun.hareketEmri) {
+    profilSolMenuAcilisTalebiAyarla(null);
     hareketEmriHedefSec(id);
     return;
   }
-  oyun.seciliId = id;
+  const ikinciTikAynıBolge = !!(oncekiSecili && oncekiSecili.id === hedef.id);
+  const profilAcilisTalebi = ikinciTikAynıBolge && !secimOps?.shiftKey && hedef.owner !== "tarafsiz";
+  profilSolMenuAcilisTalebiAyarla(profilAcilisTalebi ? hedef.id : null);
+  oyun.seciliId = hedef.id;
   uiGuncel(callbacklar);
 }
 
@@ -326,6 +1023,81 @@ function binaBonus(b, bonusTip) {
   }, 0);
 }
 
+function ekonomiDurumu() {
+  if (!oyun.ekonomi || typeof oyun.ekonomi !== "object") {
+    oyun.ekonomi = { haracSeviye: "orta", alimBuTur: 0, sonHaracGeliri: 0, personelTavanEk: 0 };
+  }
+  if (!EKONOMI_DENGE.haracSeviyeleri[oyun.ekonomi.haracSeviye]) oyun.ekonomi.haracSeviye = "orta";
+  if (!Number.isFinite(oyun.ekonomi.alimBuTur)) oyun.ekonomi.alimBuTur = 0;
+  if (!Number.isFinite(oyun.ekonomi.sonHaracGeliri)) oyun.ekonomi.sonHaracGeliri = 0;
+  if (!Number.isFinite(oyun.ekonomi.personelTavanEk)) oyun.ekonomi.personelTavanEk = 0;
+  return oyun.ekonomi;
+}
+
+function asayisDurumuMain() {
+  if (!oyun.asayis || typeof oyun.asayis !== "object") {
+    oyun.asayis = { sucluluk: 0, polisBaski: 0, sonBaskinTur: -999 };
+  }
+  if (!Number.isFinite(oyun.asayis.sucluluk)) oyun.asayis.sucluluk = 0;
+  if (!Number.isFinite(oyun.asayis.polisBaski)) oyun.asayis.polisBaski = 0;
+  if (!Number.isFinite(oyun.asayis.sonBaskinTur)) oyun.asayis.sonBaskinTur = -999;
+  return oyun.asayis;
+}
+
+function bizOrtalamaSadakat(bizBolgeler) {
+  if (!bizBolgeler.length) return 55;
+  const toplam = bizBolgeler.reduce((t, b) => t + (Number(b.sadakat) || 55), 0);
+  return toplam / bizBolgeler.length;
+}
+
+function aktifHaracProfili() {
+  const seviye = ekonomiDurumu().haracSeviye || "orta";
+  return EKONOMI_DENGE.haracSeviyeleri[seviye] || EKONOMI_DENGE.haracSeviyeleri.orta;
+}
+
+function haracGeliriHesapla(bizBolgeler, harac) {
+  const taban = bizBolgeler.reduce((toplam, b) => {
+    const gelirTabani = (b.gelir || 0) * EKONOMI_DENGE.haracGelirOrani;
+    const nufusKatkisi = (b.nufus || 0) * EKONOMI_DENGE.haracNufusCarpani;
+    const yatirimCarpani = 1 + (b.yGel || 0) * EKONOMI_DENGE.haracYatirimBonus;
+    return toplam + (gelirTabani + nufusKatkisi) * yatirimCarpani;
+  }, 0);
+  return Math.max(0, Math.round(taban * (harac?.gelirCarpani || 1)));
+}
+
+function oyuncuHaracTick(bizBolgeler) {
+  const eco = ekonomiDurumu();
+  const harac = aktifHaracProfili();
+  const as = asayisDurumuMain();
+  const gelir = haracGeliriHesapla(bizBolgeler, harac);
+  eco.sonHaracGeliri = gelir;
+  eco.alimBuTur = 0;
+  if (gelir > 0) oyun.fraksiyon.biz.para += gelir;
+
+  if (harac.sadakatDelta !== 0) {
+    bizBolgeler.forEach((b) => {
+      const mevcut = Number(b.sadakat) || 55;
+      b.sadakat = Math.max(0, Math.min(100, mevcut + harac.sadakatDelta));
+    });
+  }
+
+  as.sucluluk = Math.max(0, Math.min(200, (as.sucluluk || 0) + harac.suclulukDelta));
+  as.polisBaski = Math.max(0, Math.min(100, (as.polisBaski || 0) + harac.polisDelta));
+
+  const ortSad = bizOrtalamaSadakat(bizBolgeler);
+  if (eco.haracSeviye === "yuksek" && ortSad < EKONOMI_DENGE.haracKrizSadakatEsigi) {
+    as.polisBaski = Math.max(0, Math.min(100, as.polisBaski + EKONOMI_DENGE.haracKrizPolisEtkisi));
+    bizBolgeler.forEach((b) => {
+      const mevcut = Number(b.sadakat) || 55;
+      b.sadakat = Math.max(0, Math.min(100, mevcut + EKONOMI_DENGE.haracKrizSadakatDarbe));
+    });
+  }
+
+  if (oyun.tur % 5 === 0) {
+    logYaz(`💸 Haraç geliri: +${gelir} ₺ (${harac.ad || eco.haracSeviye}).`);
+  }
+}
+
 function geceEkonomiBonusu(b) {
   if (b.owner !== "biz") return 0;
   if (b.ozellik !== "kumarhane" && b.ozellik !== "carsi") return 0;
@@ -334,25 +1106,18 @@ function geceEkonomiBonusu(b) {
 
 function gencBirimiOlustur(owner, bolgeId, adet = 1) {
   if (adet <= 0) return;
-  oyun.birimler.push({
-    id: `k${++oyun.birimSayac}`,
-    owner,
-    adet,
-    tip: "genc",
-    konumId: bolgeId,
-    hedefId: null,
-    rota: [],
-    durum: "bekle",
-    egitimKalan: BIRIM_TIPLERI.genc.egitimTur,
-  });
+  return yiginaEkle(bolgeId, owner, adet, "genc");
 }
 
 function gecekonduTick() {
   if (oyun.tur % 4 !== 0) return;
   oyun.bolgeler.forEach((b) => {
     if (b.owner === "tarafsiz" || b.ozellik !== "gecekondu") return;
-    gencBirimiOlustur(b.owner, b.id, 1);
-    if (b.owner === "biz") logYaz(`🏘️ ${b.ad} gecekondu ağı 1 genç eleman çıkardı.`);
+    const eklenen = gencBirimiOlustur(b.owner, b.id, 1);
+    if (b.owner === "biz") {
+      if (eklenen > 0) logYaz(`🏘️ ${b.ad} gecekondu ağı 1 genç eleman çıkardı.`);
+      else logYaz(`🏘️ ${b.ad} gecekondu ağı personel tavanı nedeniyle yeni eleman çıkaramadı.`);
+    }
   });
 }
 
@@ -376,6 +1141,8 @@ function oyuncuUretimTick() {
     oyun.fraksiyon.biz.para += b.gelir * gelX * gelirLider * bolgeBonus * kriz;
   });
 
+  oyuncuHaracTick(bizBolgeler);
+
   // Adam üretimi (her 5 turda bir) — lider + bölge bonusları dahil
   if (oyun.tur % 5 === 0) {
     const adamLider = 1 + liderBonus("biz", "adamCarpani");
@@ -385,8 +1152,8 @@ function oyuncuUretimTick() {
       let aday = Math.max(0, Math.round(((b.nufus || 0) / 35) * carp));
       aday = Math.min(aday, b.nufus || 0);
       if (aday > 0) {
-        yiginaEkle(b.id, "biz", aday);
-        b.nufus -= aday;
+        const eklenen = yiginaEkle(b.id, "biz", aday);
+        if (eklenen > 0) b.nufus -= eklenen;
       }
     });
   }
@@ -412,8 +1179,17 @@ function yaraliTick() {
       // İyileşti — en yakın dost bölgeye ekle
       const dost = oyun.bolgeler.find((b) => b.owner === y.owner);
       if (dost) {
-        yiginaEkle(dost.id, y.owner, y.adet);
-        logYaz(`🏥 ${y.adet} yaralı iyileşti ve ${dost.ad} bölgesine döndü. (${oyun.fraksiyon[y.owner]?.ad || y.owner})`);
+        const eklenen = yiginaEkle(dost.id, y.owner, y.adet);
+        if (eklenen > 0) {
+          logYaz(`🏥 ${eklenen} yaralı iyileşti ve ${dost.ad} bölgesine döndü. (${oyun.fraksiyon[y.owner]?.ad || y.owner})`);
+        }
+        const kalan = Math.max(0, y.adet - eklenen);
+        if (kalan > 0) {
+          y.adet = kalan;
+          y.turKaldi = 2;
+          if (y.owner === "biz") logYaz(`🏥 ${kalan} yaralı personel tavanı nedeniyle beklemede kaldı.`);
+          return true;
+        }
       }
       return false;
     }
@@ -426,12 +1202,93 @@ function oyuncuBakimTick() {
   if (gider <= 0) return;
   oyun.fraksiyon.biz.para -= gider;
   if (oyun.fraksiyon.biz.para < 0) {
-    oyun.bolgeler
-      .filter((b) => b.owner === "biz" && (b.garnizon || 0) > 0)
-      .forEach((b) => { b.garnizon = Math.max(0, Math.floor((b.garnizon || 0) * 0.95)); });
     oyun.birimler
       .filter((u) => u.owner === "biz")
       .forEach((u) => { u.adet = Math.max(1, Math.floor(u.adet * 0.95)); });
+  }
+}
+
+const EKONOMI_KPI_HEDEFLERI = {
+  20: { netGelir: 80, bakimOranMax: 0.7, ortBirimBoyutu: 6 },
+  40: { netGelir: 140, bakimOranMax: 0.78, ortBirimBoyutu: 8 },
+  60: { netGelir: 220, bakimOranMax: 0.85, ortBirimBoyutu: 10 },
+};
+
+function bizTurEkonomiMetrikleri() {
+  const bizBolgeler = oyun.bolgeler.filter((b) => b.owner === "biz");
+  const gelirLider = 1 + liderBonus("biz", "gelirCarpani");
+  const kriz = krizCarpani("biz");
+  const arastirmaBonus = arastirmaEfekt("gelirBonus");
+  const pasifGelir = arastirmaEfekt("pasifGelir");
+  let gelir = pasifGelir;
+  bizBolgeler.forEach((b) => {
+    const gelX = 1 + (b.yGel || 0) * 0.5;
+    const bolgeBonus =
+      1 +
+      bolgeOzellikBonus(b, "gelirBonus") +
+      binaBonus(b, "gelirBonus") +
+      arastirmaBonus +
+      geceEkonomiBonusu(b);
+    gelir += (b.gelir || 0) * gelX * gelirLider * bolgeBonus * kriz;
+  });
+  gelir += haracGeliriHesapla(bizBolgeler, aktifHaracProfili());
+  const bakim = ownerBakimToplami("biz");
+  const bakimOran = gelir > 0 ? (bakim / gelir) : (bakim > 0 ? 1 : 0);
+
+  const yiginlar = oyun.birimler.filter(
+    (k) => k.owner === "biz" && !k._sil && (k.adet || 0) > 0 && !k.hedefId && (!k.rota || k.rota.length === 0)
+  );
+  const toplamBirim = yiginlar.reduce((t, k) => t + (k.adet || 0), 0);
+  const toplamGrup = yiginlar.length;
+  const ortBirimBoyutu = toplamGrup > 0 ? (toplamBirim / toplamGrup) : 0;
+
+  return {
+    gelir,
+    bakim,
+    netGelir: gelir - bakim,
+    bakimOran,
+    ortBirimBoyutu,
+  };
+}
+
+function ekonomiKpiTick() {
+  if (!oyun.ekonomiKpi || typeof oyun.ekonomiKpi !== "object") {
+    oyun.ekonomiKpi = { hedefTurlar: [20, 40, 60], kayitlar: [] };
+  }
+  if (!Array.isArray(oyun.ekonomiKpi.hedefTurlar)) oyun.ekonomiKpi.hedefTurlar = [20, 40, 60];
+  if (!Array.isArray(oyun.ekonomiKpi.kayitlar)) oyun.ekonomiKpi.kayitlar = [];
+
+  const hedefTurlar = new Set(oyun.ekonomiKpi.hedefTurlar);
+  if (!hedefTurlar.has(oyun.tur)) return;
+  if (oyun.ekonomiKpi.kayitlar.some((k) => k?.tur === oyun.tur && k?.owner === "biz")) return;
+
+  const metrik = bizTurEkonomiMetrikleri();
+  const hedef = EKONOMI_KPI_HEDEFLERI[oyun.tur] || null;
+  const netTamam = !hedef || metrik.netGelir >= hedef.netGelir;
+  const bakimTamam = !hedef || metrik.bakimOran <= hedef.bakimOranMax;
+  const boyutTamam = !hedef || metrik.ortBirimBoyutu >= hedef.ortBirimBoyutu;
+  const durum = (netTamam && bakimTamam && boyutTamam) ? "hedefte" : "geride";
+
+  oyun.ekonomiKpi.kayitlar.push({
+    tur: oyun.tur,
+    owner: "biz",
+    gelir: Math.round(metrik.gelir),
+    bakim: Math.round(metrik.bakim),
+    netGelir: Math.round(metrik.netGelir),
+    bakimOran: Number(metrik.bakimOran.toFixed(3)),
+    ortBirimBoyutu: Number(metrik.ortBirimBoyutu.toFixed(2)),
+    durum,
+  });
+
+  logYaz(
+    `📊 KPI T${oyun.tur}: Net ${Math.round(metrik.netGelir)}₺ | Bakım/Gelir ${(metrik.bakimOran * 100).toFixed(1)}% | Ortalama grup ${metrik.ortBirimBoyutu.toFixed(1)} (${durum}).`
+  );
+  if (!netTamam || !bakimTamam || !boyutTamam) {
+    const eksikler = [];
+    if (!netTamam) eksikler.push(`net >= ${hedef.netGelir}`);
+    if (!bakimTamam) eksikler.push(`bakım/gelir <= ${(hedef.bakimOranMax * 100).toFixed(0)}%`);
+    if (!boyutTamam) eksikler.push(`ortalama grup >= ${hedef.ortBirimBoyutu}`);
+    logYaz(`⚠ KPI hedef sapması (T${oyun.tur}): ${eksikler.join(", ")}.`);
   }
 }
 
@@ -498,6 +1355,7 @@ function turIsle() {
 
   // Oyuncu bakım maliyeti
   oyuncuBakimTick();
+  ekonomiKpiTick();
 
   // AI araştırma ilerlemesi
   aiArastirmaTick("ai1");
@@ -508,11 +1366,42 @@ function turIsle() {
   aiSaldiriHareket("ai1");
   aiSaldiriHareket("ai2");
   aiSaldiriHareket("ai3");
+  aiKoordineliSaldiriDegerlendirYap("ai1");
+  aiKoordineliSaldiriDegerlendirYap("ai2");
+  aiKoordineliSaldiriDegerlendirYap("ai3");
 
   // AI casusluk
   aiCasuslukYap("ai1");
   aiCasuslukYap("ai2");
   aiCasuslukYap("ai3");
+
+  // Diplomasi turu
+  const diploMesajlar = diplomasiTick();
+  let diploOlayVar = false;
+  diploMesajlar.forEach((ham) => {
+    if (!ham) return;
+    const olay = (typeof ham === "string") ? { metin: ham } : ham;
+    const metin = String(olay.metin || "").trim();
+    if (!metin || metin.includes("hafıza")) return;
+
+    if (olay.popup) {
+      diploPopupKuyrugaEkle({
+        ...olay,
+        metin,
+      });
+      diploOlayVar = true;
+    }
+
+    const ittifakMesaji = /ittifak/i.test(metin);
+    const logaYaz = olay.log === true || ittifakMesaji;
+    if (logaYaz) {
+      logYaz(`🤝 ${metin}`);
+      diploOlayVar = true;
+    }
+  });
+  if (diploOlayVar) sesCal("diplo");
+  ittifakMudahaleTick();
+  ittifakBozulduKontrol();
 
   // Rastgele olaylar
   olayTick();
@@ -540,6 +1429,7 @@ function turIsle() {
   otomatikKaydet();
 
   // birliklerin varışı & savaş
+  operasyonTick();
   hareketTick();
   motorluHizTick();   // Eski mekanik: no-op (geriye dönük uyumluluk)
   // kritik: pause butonu handler'ı düşmesin diye tam UI yenile
@@ -708,14 +1598,19 @@ function renderKayitSlotlari(onYukle) {
 }
 
 function isimAkisi() {
+  baslangicSecimModu = false;
+  bekleyenBaslangicKurulumu = null;
   isimModalGoster();
   renderKayitSlotlari((slot) => {
     const basarili = oyunYukle(slot);
     if (!basarili) { showToast("Kayıt yüklenemedi.", "hata"); return; }
+    baslangicSecimModu = false;
+    bekleyenBaslangicKurulumu = null;
 
     // Yükleme sonrası map cache ve istatistik canvas sıfırla
     bolgeMapTemizle();
     istatistikSifirla();
+    arastirmaDurumunuDogrula();
 
     isimModalKapat();
     logYaz(`💾 Slot ${slot + 1} yüklendi — "${oyun.fraksiyon.biz.ad}", Tur ${oyun.tur}`);
@@ -736,39 +1631,21 @@ function isimAkisi() {
 
   isimModalBagla(
     () => {
-      // Rastgele
-      const ad = rastgeleIsim();
-      document.getElementById("isim-input").value = ad;
+      document.getElementById("isim-input").value = rastgeleIsim();
+      const ai1 = document.getElementById("isim-ai1");
+      const ai2 = document.getElementById("isim-ai2");
+      const ai3 = document.getElementById("isim-ai3");
+      if (ai1) ai1.value = rastgeleIsim();
+      if (ai2) ai2.value = rastgeleIsim();
+      if (ai3) ai3.value = rastgeleIsim();
     },
     () => {
-      // Başla
-      const inp = document.getElementById("isim-input");
-      const zor = document.getElementById("zorluk").value;
-      const size = "istanbul-buyuk";
-
-      const ad = inp.value.trim().length ? inp.value.trim() : rastgeleIsim();
-      yeniOyun({ zorluk: zor, mapSize: size });
-      oyun.fraksiyon.biz.ad = ad;
-
-      document.getElementById("efs-biz").textContent = ad;
-      document.getElementById("efs-ai1").textContent = oyun.fraksiyon.ai1.ad;
-      document.getElementById("efs-ai2").textContent = oyun.fraksiyon.ai2.ad;
-      document.getElementById("efs-ai3").textContent = oyun.fraksiyon.ai3.ad;
-
-      isimModalKapat();
-      logYaz(
-        `Çete: "${ad}", zorluk: "${zor.toUpperCase()}", harita: İstanbul (Büyük).`
-      );
-      durumCiz();
-      haritaCiz(onBolgeSec);
-      uiGuncel(callbacklar);
-      ensureGameControls();
-
-      oyun.duraklat = false;
-      durumCiz();
-      hareketTick();
-      setTimeout(() => tutorialBaslat(), 120);
-    }
+      const kurulum = modalAyarlariniOku();
+      oyunKurulumunuBaslat(kurulum);
+    },
+    () => {
+      haritadanBaslangicSecimiBaslat();
+    },
   );
 }
 
@@ -780,7 +1657,6 @@ function isimAkisi() {
 
   // Başlangıçta duraklatılmış; modal açıkken tur akmaz
   isimAkisi();
-  garnizonTemizleVeYiginaTasi();
   dongu();
 })();
 

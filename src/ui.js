@@ -4,13 +4,15 @@ import {
   fraksiyonAdi,
   bizBolgeSayisi,
   rozetSayilari,
+  ownerToplamPersonel,
+  ownerPersonelTavan,
 } from "./state.js";
-import { komsuMu } from "./map.js";
-import { BOLGE_OZELLIKLERI, AYAR, BINA_TIPLERI } from "./config.js";
+import { BOLGE_OZELLIKLERI, AYAR, BINA_TIPLERI, EKONOMI_DENGE, DIPLOMASI, liderAvatarUrl } from "./config.js";
 import { istatistikGrafik } from "./stats.js";
 import { ISTANBUL_ILCELER, KOPRULER } from "./istanbul.js";
 import { sadakatRenk, sadakatEtiket } from "./loyalty.js";
 import { BIRIM_TIPLERI, TASIT_TIPLERI, ownerBakimToplami } from "./units.js";
+import { gucSiralamasiHesapla } from "./gucDengesi.js";
 import {
   ARASTIRMA_DALLARI,
   dalIlerleme,
@@ -20,13 +22,31 @@ import {
   arastirmaDurumunuDogrula,
 } from "./research.js";
 import { kesifAktifMi, operasyonMumkunMu } from "./spy.js";
-import { bolgeTasitDurumu, ownerToplamKapasite, ownerToplamTasit } from "./logistics.js";
+import { ownerTasit, ownerToplamKapasite, ownerToplamTasit } from "./logistics.js";
+import { diplomasiOzet, iliskiDurumu, isDostIttifak } from "./diplomasi.js";
 
 export function logYaz(msg) {
   const p = document.getElementById("log");
   const d = document.createElement("div");
   d.textContent = `[${oyun.tur}. tur] ${msg}`;
   p.insertBefore(d, p.firstChild);
+}
+
+function liderAvatarHTML(lider, boyut = 20) {
+  if (!lider) return "";
+  const src = lider.avatarUrl || liderAvatarUrl(lider);
+  if (!src) return "";
+  const safeSrc = String(src).replace(/"/g, "&quot;");
+  const safeAd = String(lider.ad || "Lider").replace(/"/g, "&quot;");
+  return `<img src="${safeSrc}" alt="${safeAd}" style="width:${boyut}px;height:${boyut}px;border-radius:50%;border:1px solid rgba(255,255,255,.35);vertical-align:middle;object-fit:cover;margin-right:4px">`;
+}
+
+function htmlEsc(v) {
+  return String(v ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 let aktifSagSekme = "detay";
@@ -53,6 +73,7 @@ let istanbulSuruklemePx = 0;
 let istanbulEtiketFitTimer = null;
 const istanbulPathCache = new Map();
 const istanbulLabelCache = new Map();
+const istanbulHareketCache = new Map();
 const istanbulPoligonCache = new Map();
 const ISTANBUL_TIK_SURUKLEME_ESIK = 8;
 const ILCE_KISA_ADLAR = Object.freeze({
@@ -63,6 +84,21 @@ const ILCE_KISA_ADLAR = Object.freeze({
   beylikduzu: "B.Düzü",
   sultanbeyli: "S.Beyli",
 });
+const HARITA_MODLARI = Object.freeze({
+  siyasi: { ad: "Siyasi", tus: "1" },
+  askeri: { ad: "Askeri", tus: "2" },
+  ekonomik: { ad: "Ekonomik", tus: "3" },
+  lojistik: { ad: "Lojistik", tus: "4" },
+});
+const HARITA_MOD_SIRASI = Object.freeze(["siyasi", "askeri", "ekonomik", "lojistik"]);
+let aktifHaritaModu = "siyasi";
+let haritaKisayolBagli = false;
+let duraklatKisayolBagli = false;
+let contextMenuKapatBagli = false;
+let profilMenuAcik = false;
+let profilSonAcilanBolgeId = null;
+let profilAcilisTalepBolgeId = null;
+let diploGunlukFiltre = "tum";
 
 function istanbulDomCacheSifirla() {
   if (istanbulEtiketFitTimer) {
@@ -71,6 +107,7 @@ function istanbulDomCacheSifirla() {
   }
   istanbulPathCache.clear();
   istanbulLabelCache.clear();
+  istanbulHareketCache.clear();
 }
 
 function sayiyiSinirla(deger, min, max) {
@@ -410,6 +447,22 @@ function ilceEtiketiniOturt(svg, bolgeId, ilce, labelEl) {
   }
 }
 
+function ilceHareketIndikatorKonumGuncelle(bolgeId, labelEl, svg = null) {
+  if (!labelEl) return;
+  const indikator =
+    istanbulHareketCache.get(bolgeId)
+    || (svg ? svg.querySelector(`[data-hareket-id="${bolgeId}"]`) : document.querySelector(`[data-hareket-id="${bolgeId}"]`));
+  if (!indikator) return;
+  if (!istanbulHareketCache.has(bolgeId)) istanbulHareketCache.set(bolgeId, indikator);
+  const x = Number(labelEl.getAttribute("x"));
+  const y = Number(labelEl.getAttribute("y"));
+  const fontSize = parseFloat(labelEl.style.fontSize || "8");
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  const offset = Math.max(5.2, fontSize * 0.9);
+  indikator.setAttribute("x", x.toFixed(1));
+  indikator.setAttribute("y", (y + offset).toFixed(1));
+}
+
 function ilceEtiketleriniPoligonaHizala(svg, sadeceLabelPointEksik = false) {
   if (!svg) return;
   oyun.bolgeler.forEach((b) => {
@@ -421,6 +474,7 @@ function ilceEtiketleriniPoligonaHizala(svg, sadeceLabelPointEksik = false) {
     if (label && !istanbulLabelCache.has(b.id)) istanbulLabelCache.set(b.id, label);
     if (!ilce || !label) return;
     ilceEtiketiniOturt(svg, b.id, ilce, label);
+    ilceHareketIndikatorKonumGuncelle(b.id, label, svg);
   });
 }
 
@@ -451,7 +505,9 @@ function istanbulEtiketTipografiGuncelle() {
     const dusukZoom = zoom <= 1.35;
     const zoomSafe = Math.max(1, zoom);
     const dar = ilceDarMi(ilce);
-    let etiketMetni = b.ad;
+    let adMetni = b.ad;
+    let bilgiMetni = bolgeEtiketIstihbaratMetni(b, "normal");
+    let etiketMetni = bilgiMetni ? `${adMetni} ${bilgiMetni}` : adMetni;
     const bboxW = ilce?.bbox ? Math.max(26, ilce.bbox.maxX - ilce.bbox.minX) : 70;
     const maxEtiketW = bboxW * sayiyiSinirla(0.88 - zoomNorm * 0.16, 0.64, 0.88);
     label.textContent = etiketMetni;
@@ -465,8 +521,29 @@ function istanbulEtiketTipografiGuncelle() {
     let gercekGenislik = metinGenisligi();
     if (dusukZoom && dar && gercekGenislik > maxEtiketW * 1.02) {
       const kisa = ilceKisaAdi(b);
-      if (kisa && kisa !== etiketMetni) {
-        etiketMetni = kisa;
+      if (kisa && kisa !== adMetni) {
+        adMetni = kisa;
+      }
+      if (bilgiMetni) {
+        bilgiMetni = bolgeEtiketIstihbaratMetni(b, "kisa");
+      }
+      etiketMetni = bilgiMetni ? `${adMetni} ${bilgiMetni}` : adMetni;
+      label.textContent = etiketMetni;
+      gercekGenislik = metinGenisligi();
+    }
+
+    if (gercekGenislik > maxEtiketW * 1.06 && bilgiMetni) {
+      bilgiMetni = bolgeEtiketIstihbaratMetni(b, "dar");
+      etiketMetni = bilgiMetni ? `${adMetni} ${bilgiMetni}` : adMetni;
+      label.textContent = etiketMetni;
+      gercekGenislik = metinGenisligi();
+    }
+
+    if (dusukZoom && gercekGenislik > maxEtiketW * 1.1) {
+      const kisa = ilceKisaAdi(b);
+      if (kisa && kisa !== adMetni) {
+        adMetni = kisa;
+        etiketMetni = bilgiMetni ? `${adMetni} ${bilgiMetni}` : adMetni;
         label.textContent = etiketMetni;
         gercekGenislik = metinGenisligi();
       }
@@ -482,6 +559,7 @@ function istanbulEtiketTipografiGuncelle() {
     label.removeAttribute("textLength");
     label.removeAttribute("lengthAdjust");
     label.style.display = stil.adGoster ? "" : "none";
+    ilceHareketIndikatorKonumGuncelle(b.id, label);
   });
 }
 
@@ -584,29 +662,166 @@ function istanbulEtkilesimBagla(svgKap, svg, onBolgeSec) {
   const dragBitir = (e) => {
     if (!drag || (e && e.pointerId !== drag.pointerId)) return;
     const secimId = tiklananBolgeId;
+    const shift = !!e?.shiftKey;
     drag = null;
     tiklananBolgeId = null;
     svgKap.classList.remove("panning");
     istanbulEtiketFitPlanla(svg, 0);
     istanbulSuruklemePx = 0;
-    if (secimId && typeof onBolgeSec === "function") onBolgeSec(secimId);
+    if (secimId && typeof onBolgeSec === "function") onBolgeSec(secimId, { shiftKey: shift, kaynak: "pointer" });
   };
   svg.addEventListener("pointerup", dragBitir);
   svg.addEventListener("pointercancel", dragBitir);
   svg.addEventListener("dblclick", (e) => {
+    const hedefPath = e.target?.closest?.(".ilce-path");
+    const bolgeId = hedefPath?.getAttribute("data-id");
+    const hedef = bolgeId ? bolgeById(bolgeId) : null;
+    if (hedef && hedef.owner !== "biz" && hedef.owner !== "tarafsiz" && typeof onBolgeSec === "function") {
+      e.preventDefault();
+      onBolgeSec(bolgeId, { dblclick: true, kaynak: "dblclick" });
+      return;
+    }
     e.preventDefault();
     const center = istanbulEkranToDunya(svg, e.clientX, e.clientY);
     istanbulZoomUygula(svg, 0.82, center);
   });
+  svg.addEventListener("contextmenu", (e) => {
+    const hedefPath = e.target?.closest?.(".ilce-path");
+    const bolgeId = hedefPath?.getAttribute("data-id");
+    if (!bolgeId) return;
+    e.preventDefault();
+    haritaContextMenuAc(e.clientX, e.clientY, bolgeId, onBolgeSec);
+  });
+}
+
+function haritaContextMenuKapat() {
+  const menu = document.getElementById("harita-context-menu");
+  if (!menu) return;
+  menu.style.display = "none";
+  menu.innerHTML = "";
+}
+
+function haritaContextMenuAc(x, y, bolgeId, onBolgeSec) {
+  const bolge = bolgeById(bolgeId);
+  if (!bolge) return;
+
+  let menu = document.getElementById("harita-context-menu");
+  if (!menu) {
+    menu = document.createElement("div");
+    menu.id = "harita-context-menu";
+    menu.style.cssText = "position:fixed;z-index:10020;min-width:180px;background:rgba(12,20,30,.96);border:1px solid rgba(255,255,255,.16);border-radius:10px;padding:6px;box-shadow:0 10px 28px rgba(0,0,0,.45);backdrop-filter:blur(4px);";
+    document.body.appendChild(menu);
+  }
+
+  const secVeYenile = () => {
+    oyun.seciliId = bolgeId;
+    if (aktifCallbacklar) uiGuncel(aktifCallbacklar);
+  };
+
+  const aksiyonlar = [];
+  aksiyonlar.push({
+    etiket: "Bölgeyi Seç",
+    calistir: () => {
+      if (typeof onBolgeSec === "function") onBolgeSec(bolgeId, { kaynak: "context" });
+      else secVeYenile();
+    },
+  });
+
+  if (bolge.owner === "tarafsiz") {
+    aksiyonlar.push({
+      etiket: "💰 Rüşvet ile Teslim Al",
+      calistir: async () => {
+        secVeYenile();
+        await aktifCallbacklar?.teslimAl?.();
+      },
+    });
+  } else if (bolge.owner !== "biz") {
+    aksiyonlar.push({
+      etiket: "⚔ Hızlı Saldırı",
+      calistir: async () => {
+        secVeYenile();
+        await aktifCallbacklar?.saldiriHizliAcil?.(bolgeId);
+      },
+    });
+    aksiyonlar.push({
+      etiket: "🔍 Keşif",
+      calistir: async () => {
+        secVeYenile();
+        await aktifCallbacklar?.casuslukOperasyon?.(bolgeId, "kesif");
+      },
+    });
+    aksiyonlar.push({
+      etiket: "🗡️ Suikast",
+      calistir: async () => {
+        secVeYenile();
+        await aktifCallbacklar?.casuslukOperasyon?.(bolgeId, "suikast");
+      },
+    });
+  } else {
+    aksiyonlar.push({
+      etiket: "📦 Hareket Emri Başlat",
+      calistir: async () => {
+        secVeYenile();
+        await aktifCallbacklar?.hareketEmriBaslat?.();
+      },
+    });
+    aksiyonlar.push({
+      etiket: "📍 Toplantı Noktası Yap",
+      calistir: async () => {
+        secVeYenile();
+        await aktifCallbacklar?.toplantiNoktasiYap?.();
+      },
+    });
+    aksiyonlar.push({
+      etiket: "🚚 Toplantı Noktasına Çağır",
+      calistir: async () => {
+        secVeYenile();
+        const cagir = aktifCallbacklar?.toplantiNoktasinaCagir || aktifCallbacklar?.toplantiNoktasinaGonder;
+        if (typeof cagir === "function") await cagir();
+      },
+    });
+  }
+
+  menu.innerHTML = `
+    <div style="padding:4px 6px 6px 6px;font-size:11px;color:#a9bdd2;border-bottom:1px solid rgba(255,255,255,.08);margin-bottom:4px;">
+      ${bolge.ad} • ${fraksiyonAdi(bolge.owner)}
+    </div>
+  `;
+  aksiyonlar.forEach((a) => {
+    const btn = document.createElement("button");
+    btn.className = "buton grimsi";
+    btn.style.cssText = "display:block;width:100%;text-align:left;margin:4px 0;padding:7px 9px;font-size:12px;";
+    btn.textContent = a.etiket;
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      haritaContextMenuKapat();
+      await a.calistir();
+    };
+    menu.appendChild(btn);
+  });
+
+  menu.style.display = "block";
+  menu.style.left = `${Math.min(window.innerWidth - 210, Math.max(8, x))}px`;
+  menu.style.top = `${Math.min(window.innerHeight - 220, Math.max(8, y))}px`;
+
+  if (!contextMenuKapatBagli) {
+    contextMenuKapatBagli = true;
+    document.addEventListener("click", () => haritaContextMenuKapat());
+    document.addEventListener("scroll", () => haritaContextMenuKapat(), true);
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") haritaContextMenuKapat();
+    });
+  }
 }
 
 function sagSekmeAyarla(sekmeId) {
-  aktifSagSekme = sekmeId;
+  const hedefSekme = document.querySelector(`.sag-sekme[data-sekme="${sekmeId}"]`) ? sekmeId : "detay";
+  aktifSagSekme = hedefSekme;
   document.querySelectorAll(".sag-sekme").forEach((btn) => {
-    btn.classList.toggle("aktif", btn.getAttribute("data-sekme") === sekmeId);
+    btn.classList.toggle("aktif", btn.getAttribute("data-sekme") === hedefSekme);
   });
   document.querySelectorAll(".sag-panel").forEach((panel) => {
-    panel.classList.toggle("aktif", panel.getAttribute("data-panel") === sekmeId);
+    panel.classList.toggle("aktif", panel.getAttribute("data-panel") === hedefSekme);
   });
 }
 
@@ -624,6 +839,7 @@ function tipIkonOzet(bolgeId, owner = null) {
   const ozet = {};
   oyun.birimler
     .filter((k) => k.konumId === bolgeId && k.owner === hedefOwner && k.adet > 0)
+    .filter((k) => !k._sil && !k.hedefId && (!k.rota || k.rota.length === 0))
     .forEach((k) => {
       const tip = k.tip || "tetikci";
       ozet[tip] = (ozet[tip] || 0) + k.adet;
@@ -636,16 +852,230 @@ function tipIkonOzet(bolgeId, owner = null) {
     .join(" ");
 }
 
+function bolgeHazirBirimSayisi(bolgeId, owner = null) {
+  const hedefOwner = owner ?? bolgeById(bolgeId)?.owner;
+  if (!hedefOwner || hedefOwner === "tarafsiz") return 0;
+  return oyun.birimler
+    .filter((k) => k.konumId === bolgeId && k.owner === hedefOwner)
+    .filter((k) => !k._sil && !k.hedefId && (!k.rota || k.rota.length === 0))
+    .reduce((t, k) => t + (k.adet || 0), 0);
+}
+
 function dusmanIstihbaratiGizliMi(bolge) {
   if (!bolge) return false;
   return bolge.owner !== "biz" && bolge.owner !== "tarafsiz" && !kesifAktifMi(bolge.id);
 }
 
+function bolgeBirlikToplami(bolgeId, owner = null, sadeceHazir = false) {
+  const hedefOwner = owner ?? bolgeById(bolgeId)?.owner;
+  if (!hedefOwner || hedefOwner === "tarafsiz") return 0;
+  return oyun.birimler
+    .filter((u) => u.konumId === bolgeId && u.owner === hedefOwner && !u._sil)
+    .filter((u) => (sadeceHazir ? (!u.hedefId && (!u.rota || u.rota.length === 0)) : true))
+    .reduce((t, u) => t + (u.adet || 0), 0);
+}
+
+function bolgeGidenKonvoyToplami(bolgeId, owner = null) {
+  const hedefOwner = owner ?? bolgeById(bolgeId)?.owner;
+  if (!hedefOwner || hedefOwner === "tarafsiz") return 0;
+  return oyun.birimler
+    .filter((u) => u.konumId === bolgeId && u.owner === hedefOwner && u.hedefId && u.hedefId !== bolgeId && !u._sil)
+    .reduce((t, u) => t + (u.adet || 0), 0);
+}
+
+function bolgeGeliriHesapla(bolge) {
+  return Math.round((bolge?.gelir || 0) * (1 + (bolge?.yGel || 0) * 0.5));
+}
+
+function bolgeEtiketIstihbaratMetni(bolge, seviye = "normal", mod = aktifHaritaModu) {
+  if (!bolge || dusmanIstihbaratiGizliMi(bolge)) return "";
+  const birlikToplam = bolgeBirlikToplami(bolge.id, bolge.owner, true);
+  const gidenToplam = bolgeGidenKonvoyToplami(bolge.id, bolge.owner);
+  const gelir = bolgeGeliriHesapla(bolge);
+  const tasit = ownerTasit(bolge.owner);
+  const araba = tasit.araba || 0;
+  const motor = tasit.motor || 0;
+  if (mod === "askeri") {
+    if (seviye === "dar") return gidenToplam > 0 ? `A${birlikToplam}→${gidenToplam}` : `A${birlikToplam}`;
+    return gidenToplam > 0 ? `⚔${birlikToplam} ▶${gidenToplam}` : `⚔${birlikToplam}`;
+  }
+  if (mod === "ekonomik") {
+    return seviye === "dar" ? `+${gelir}` : `+${gelir}₺`;
+  }
+  if (mod === "lojistik") {
+    if (seviye === "dar") return `L${araba}/${motor}`;
+    if (seviye === "kisa") return `🚗${araba}/${motor}`;
+    return `🚗${araba} 🏍️${motor}`;
+  }
+  return "";
+}
+
 function bolgeTooltipMetni(bolge) {
   if (dusmanIstihbaratiGizliMi(bolge)) {
+    if (aktifHaritaModu === "askeri") return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - Askeri istihbarat: ?`;
+    if (aktifHaritaModu === "ekonomik") return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - Ekonomi istihbaratı: ?`;
+    if (aktifHaritaModu === "lojistik") return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - Lojistik istihbarat: ?`;
     return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - İstihbarat: ?`;
   }
-  return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - Garnizon: ${bolge.garnizon || 0}`;
+
+  const birlikToplam = bolgeBirlikToplami(bolge.id, bolge.owner, true);
+  const savunmaPuani = (bolge.guv || 0) + (bolge.yGuv || 0);
+  const tasit = ownerTasit(bolge.owner);
+  const kapasite = (tasit.araba || 0) * 4 + (tasit.motor || 0) * 2;
+
+  if (aktifHaritaModu === "askeri") {
+    return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - Birlik: ${birlikToplam} | Savunma: ${savunmaPuani}`;
+  }
+  if (aktifHaritaModu === "ekonomik") {
+    const gelir = bolgeGeliriHesapla(bolge);
+    return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - Gelir: ${gelir}₺ | Adam x${(1 + (bolge.yAdam || 0) * 0.7).toFixed(1)}`;
+  }
+  if (aktifHaritaModu === "lojistik") {
+    return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - 🚗 ${tasit.araba || 0} | 🏍️ ${tasit.motor || 0} | Kapasite: ${kapasite}`;
+  }
+  return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - Garnizon: ${bolgeHazirBirimSayisi(bolge.id, bolge.owner)}`;
+}
+
+function bolgeMetrikDegeri(bolge, mod) {
+  if (mod !== "siyasi" && dusmanIstihbaratiGizliMi(bolge)) {
+    return Number.NaN;
+  }
+  if (mod === "askeri") {
+    return bolgeBirlikToplami(bolge.id, bolge.owner, true);
+  }
+  if (mod === "ekonomik") {
+    return (bolge.gelir || 0) * (1 + (bolge.yGel || 0) * 0.5);
+  }
+  if (mod === "lojistik") {
+    const t = ownerTasit(bolge.owner);
+    return (t.araba || 0) * 4 + (t.motor || 0) * 2;
+  }
+  return 0;
+}
+
+function normalizasyonaCevir(v, min, max) {
+  if (!Number.isFinite(v)) return 0;
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return 0;
+  return Math.max(0, Math.min(1, (v - min) / (max - min)));
+}
+
+function bolgeRenkHesapla(bolge, mod, min, max) {
+  if (mod === "siyasi") return "";
+  if (dusmanIstihbaratiGizliMi(bolge)) {
+    return "hsl(215 18% 34%)";
+  }
+  const v = bolgeMetrikDegeri(bolge, mod);
+  const n = normalizasyonaCevir(v, min, max);
+  if (mod === "askeri") {
+    const light = 84 - n * 48;
+    return `hsl(8 72% ${light}%)`;
+  }
+  if (mod === "ekonomik") {
+    const light = 85 - n * 44;
+    return `hsl(38 78% ${light}%)`;
+  }
+  const light = 86 - n * 46;
+  if (v <= 0) return "hsl(215 18% 38%)";
+  return `hsl(196 76% ${light}%)`;
+}
+
+function haritaModLegendMetni(mod) {
+  if (mod === "askeri") return "Düşük birlik  •  Yüksek birlik";
+  if (mod === "ekonomik") return "Düşük gelir  •  Yüksek gelir";
+  if (mod === "lojistik") return "Düşük taşıt  •  Yüksek taşıt";
+  return "Sahiplik renkleri";
+}
+
+function haritaModUstKontrolHTML() {
+  return `<span id="harita-mod-kontrol-ust" style="display:inline-flex;gap:4px;vertical-align:middle">${HARITA_MOD_SIRASI.map((mod) => {
+    const ad = HARITA_MODLARI[mod]?.ad || mod;
+    const tus = HARITA_MODLARI[mod]?.tus || "?";
+    const aktif = mod === aktifHaritaModu;
+    return `<button class="buton grimsi harita-mod-btn" data-map-mod="${mod}" style="min-height:26px;padding:3px 8px;font-size:11px;${aktif ? "border-color:#f5c542;color:#f5c542;background:rgba(245,197,66,.12);" : ""}" title="${ad} [${tus}]">${tus} ${ad}</button>`;
+  }).join("")}</span>`;
+}
+
+function haritaModUstKontrolBagla() {
+  document.querySelectorAll(".harita-mod-btn").forEach((btn) => {
+    if (btn.dataset.bagli === "1") return;
+    btn.dataset.bagli = "1";
+    btn.onclick = () => {
+      const mod = btn.getAttribute("data-map-mod");
+      if (!mod) return;
+      haritaModSec(mod);
+    };
+  });
+}
+
+function haritaModEfsaneGuncelle() {
+  const kap = document.getElementById("istanbul-svg-kap");
+  if (!kap) return;
+  let kutu = document.getElementById("harita-mod-legend");
+  if (!kutu) {
+    kutu = document.createElement("div");
+    kutu.id = "harita-mod-legend";
+    kutu.style.cssText = "position:absolute;left:12px;bottom:12px;z-index:28;padding:8px 10px;border-radius:9px;background:rgba(7,14,22,.82);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(4px);font-size:11px;color:#dbe7f6;min-width:180px;";
+    kap.appendChild(kutu);
+  }
+  const mod = HARITA_MODLARI[aktifHaritaModu] || HARITA_MODLARI.siyasi;
+  const grad =
+    aktifHaritaModu === "askeri"
+      ? "linear-gradient(90deg, hsl(8 72% 84%), hsl(8 72% 36%))"
+      : aktifHaritaModu === "ekonomik"
+        ? "linear-gradient(90deg, hsl(38 78% 85%), hsl(38 78% 42%))"
+        : aktifHaritaModu === "lojistik"
+          ? "linear-gradient(90deg, hsl(215 18% 38%), hsl(196 76% 40%))"
+          : "linear-gradient(90deg, #1e8449, #922b21, #6c2bb8, #b7950b)";
+  kutu.innerHTML = `
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+      <strong>Harita Modu: ${mod.ad}</strong>
+      <span style="font-size:10px;opacity:.8">[${mod.tus}]</span>
+    </div>
+    <div style="height:6px;border-radius:4px;margin-top:6px;background:${grad};"></div>
+    <div style="margin-top:4px;opacity:.85">${haritaModLegendMetni(aktifHaritaModu)}</div>
+  `;
+}
+
+function haritaModSec(mod, sessiz = false) {
+  if (!HARITA_MODLARI[mod]) return;
+  if (aktifHaritaModu === mod) return;
+  aktifHaritaModu = mod;
+  const svgKap = document.getElementById("istanbul-svg-kap");
+  const svg = document.getElementById("istanbul-svg");
+  if (svgKap) svgKap.setAttribute("data-mod", mod);
+  if (svg) svg.setAttribute("data-mod", mod);
+  haritaGuncel();
+  durumCiz();
+  haritaModUstKontrolBagla();
+  if (!sessiz) logYaz(`🗺️ Harita modu: ${HARITA_MODLARI[mod].ad}`);
+}
+
+function haritaModKisayolBagla() {
+  if (haritaKisayolBagli) return;
+  haritaKisayolBagli = true;
+  document.addEventListener("keydown", (e) => {
+    if (e.defaultPrevented) return;
+    const tag = (document.activeElement?.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select") return;
+    if (!["1", "2", "3", "4"].includes(e.key)) return;
+    const idx = Number(e.key) - 1;
+    haritaModSec(HARITA_MOD_SIRASI[idx]);
+  });
+}
+
+function duraklatKisayolBagla() {
+  if (duraklatKisayolBagli) return;
+  duraklatKisayolBagli = true;
+  document.addEventListener("keydown", (e) => {
+    if (e.defaultPrevented || e.repeat) return;
+    if (e.code !== "Space" && e.key !== " ") return;
+    const tag = (document.activeElement?.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select") return;
+    e.preventDefault();
+    if (typeof aktifCallbacklar?.duraklatDevam === "function") {
+      aktifCallbacklar.duraklatDevam();
+    }
+  });
 }
 
 function konvoyTipRozeti(konvoylar) {
@@ -657,6 +1087,33 @@ function konvoyTipRozeti(konvoylar) {
   return Object.entries(ozet)
     .map(([tip, adet]) => `${BIRIM_TIPLERI[tip]?.ikon || "•"}${adet}`)
     .join(" ");
+}
+
+function konvoyDurumIkonu(konvoylar) {
+  if (!Array.isArray(konvoylar) || !konvoylar.length) return "";
+  if (konvoylar.some((u) => u.bekliyor)) return "⏸";
+  if (konvoylar.some((u) => u.operasyonId)) return "⚔";
+  if (konvoylar.some((u) => u.gecisHakki)) return "↗";
+  return "▶";
+}
+
+function konvoyTahminiKalanTur(konvoy) {
+  if (!konvoy || !konvoy.hedefId) return 0;
+  const rotaUzunlugu = Array.isArray(konvoy.rota) ? konvoy.rota.length : 0;
+  const adimSayisi = 1 + rotaUzunlugu;
+  const ilkTurGecikme = konvoy._hazir ? 0 : 1;
+  return adimSayisi + ilkTurGecikme;
+}
+
+function konvoyGrubuTahminiTurMetni(konvoylar) {
+  if (!Array.isArray(konvoylar) || !konvoylar.length) return "";
+  const turlar = konvoylar
+    .map((k) => konvoyTahminiKalanTur(k))
+    .filter((t) => Number.isFinite(t) && t > 0);
+  if (!turlar.length) return "";
+  const min = Math.min(...turlar);
+  const max = Math.max(...turlar);
+  return min === max ? `${min} tur` : `${min}-${max} tur`;
 }
 
 function kontrolSinifi(owner) {
@@ -696,6 +1153,55 @@ function ensureAyarModal() {
         </div>
       </div>`;
   document.body.appendChild(wrap);
+}
+
+function ensureProfilYanMenu() {
+  if (document.getElementById("profil-sol-arka")) return;
+  const wrap = document.createElement("div");
+  wrap.id = "profil-sol-arka";
+  wrap.style.cssText =
+    "display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10030;align-items:stretch;justify-content:flex-start";
+  wrap.innerHTML = `
+    <aside id="profil-sol-menu" style="width:min(420px,92vw);height:100%;background:#141c26;color:#e8eef7;border-right:1px solid rgba(255,255,255,.12);box-shadow:10px 0 34px rgba(0,0,0,.45);display:flex;flex-direction:column">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 14px 10px 14px;border-bottom:1px solid rgba(255,255,255,.1)">
+        <strong>👤 Bölge Profili</strong>
+        <button id="profil-sol-kapat" class="buton grimsi">Kapat</button>
+      </div>
+      <div id="profil-sol-menu-icerik" style="padding:12px;overflow:auto"></div>
+    </aside>
+  `;
+  document.body.appendChild(wrap);
+
+  wrap.addEventListener("click", (e) => {
+    if (e.target === wrap) profilYanMenuKapat();
+  });
+  const kapat = document.getElementById("profil-sol-kapat");
+  if (kapat) kapat.onclick = profilYanMenuKapat;
+
+  if (!document.body.dataset.profilEscBagli) {
+    document.body.dataset.profilEscBagli = "1";
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && profilMenuAcik) profilYanMenuKapat();
+    });
+  }
+}
+
+function profilYanMenuKapat() {
+  profilMenuAcik = false;
+  const wrap = document.getElementById("profil-sol-arka");
+  if (wrap) wrap.style.display = "none";
+}
+
+function profilYanMenuAc(cb, bolgeId = oyun.seciliId) {
+  ensureProfilYanMenu();
+  profilMenuAcik = true;
+  const wrap = document.getElementById("profil-sol-arka");
+  if (wrap) wrap.style.display = "flex";
+  profilYanMenuGuncel(cb, bolgeId);
+}
+
+export function profilSolMenuAcilisTalebiAyarla(bolgeId = null) {
+  profilAcilisTalepBolgeId = bolgeId || null;
 }
 
 function arastirmaSayfaAc() {
@@ -867,6 +1373,89 @@ function arastirmaSayfaGuncel() {
   });
 }
 
+function ekonomiDurumuUi() {
+  if (!oyun.ekonomi || typeof oyun.ekonomi !== "object") {
+    oyun.ekonomi = { haracSeviye: "orta", alimBuTur: 0, sonHaracGeliri: 0, personelTavanEk: 0 };
+  }
+  if (!EKONOMI_DENGE.haracSeviyeleri[oyun.ekonomi.haracSeviye]) oyun.ekonomi.haracSeviye = "orta";
+  if (!Number.isFinite(oyun.ekonomi.alimBuTur)) oyun.ekonomi.alimBuTur = 0;
+  if (!Number.isFinite(oyun.ekonomi.sonHaracGeliri)) oyun.ekonomi.sonHaracGeliri = 0;
+  if (!Number.isFinite(oyun.ekonomi.personelTavanEk)) oyun.ekonomi.personelTavanEk = 0;
+  return oyun.ekonomi;
+}
+
+function aktifHaracSeviyesiUi() {
+  const eco = ekonomiDurumuUi();
+  return EKONOMI_DENGE.haracSeviyeleri[eco.haracSeviye] || EKONOMI_DENGE.haracSeviyeleri.orta;
+}
+
+function haracGeliriTahminBiz() {
+  const bizBolgeler = oyun.bolgeler.filter((b) => b.owner === "biz");
+  const harac = aktifHaracSeviyesiUi();
+  const taban = bizBolgeler.reduce((toplam, b) => {
+    const gelirTabani = (b.gelir || 0) * EKONOMI_DENGE.haracGelirOrani;
+    const nufusKatkisi = (b.nufus || 0) * EKONOMI_DENGE.haracNufusCarpani;
+    const yatirimCarpani = 1 + (b.yGel || 0) * EKONOMI_DENGE.haracYatirimBonus;
+    return toplam + (gelirTabani + nufusKatkisi) * yatirimCarpani;
+  }, 0);
+  return Math.max(0, Math.round(taban * (harac?.gelirCarpani || 1)));
+}
+
+function bizOrtalamaSadakatUi() {
+  const bizBolgeler = oyun.bolgeler.filter((b) => b.owner === "biz");
+  if (!bizBolgeler.length) return 55;
+  const toplam = bizBolgeler.reduce((t, b) => t + (Number(b.sadakat) || 55), 0);
+  return toplam / bizBolgeler.length;
+}
+
+function bizToplamPersonelUi() {
+  return ownerToplamPersonel("biz");
+}
+
+function bizAlimLimitDurumu() {
+  const eco = ekonomiDurumuUi();
+  const bizBolgeler = oyun.bolgeler.filter((b) => b.owner === "biz");
+  const ortSadakat = bizOrtalamaSadakatUi();
+  const as = oyun.asayis || { polisBaski: 0 };
+
+  let turKotasi =
+    EKONOMI_DENGE.alimiTurBazKota +
+    Math.floor(bizBolgeler.length * EKONOMI_DENGE.alimiTurBolgeKota) +
+    Math.floor(ortSadakat / Math.max(1, EKONOMI_DENGE.alimiTurSadakatBoleni));
+  if ((as.polisBaski || 0) >= EKONOMI_DENGE.alimiTurPolisCezaEsik) {
+    turKotasi -= EKONOMI_DENGE.alimiTurPolisCeza;
+  }
+  if (oyun.fraksiyon.biz.para >= EKONOMI_DENGE.alimiTurParaDestekEsik) {
+    turKotasi += EKONOMI_DENGE.alimiTurParaDestekBonus;
+  }
+  if (oyun.fraksiyon.biz.para <= EKONOMI_DENGE.alimiTurParaCezaEsik) {
+    turKotasi -= EKONOMI_DENGE.alimiTurParaCeza;
+  }
+  turKotasi = Math.max(3, turKotasi);
+
+  const toplamKapasite = ownerPersonelTavan("biz");
+  const toplamPersonel = ownerToplamPersonel("biz");
+  const turKalan = Math.max(0, turKotasi - (eco.alimBuTur || 0));
+  const toplamKalan = Math.max(0, toplamKapasite - toplamPersonel);
+
+  return {
+    turKotasi,
+    buTurAlim: eco.alimBuTur || 0,
+    toplamKapasite,
+    toplamPersonel,
+    alinabilir: Math.min(turKalan, toplamKalan),
+  };
+}
+
+function alimEkMaliyetiUi(adet = 1) {
+  const guvenliAdet = Math.max(0, Math.floor(Number(adet) || 0));
+  if (guvenliAdet <= 0) return 0;
+  const harac = aktifHaracSeviyesiUi();
+  const haracCarpani =
+    1 + Math.max(0, (harac.gelirCarpani || 1) - 1) * EKONOMI_DENGE.alimiEkMaliyetHaracCarpani;
+  return Math.max(0, Math.round(guvenliAdet * EKONOMI_DENGE.alimiEkMaliyetKisiBasi * haracCarpani));
+}
+
 // Net gelir hesaplama (üst bar için)
 function hesaplaNetGelirDetay(owner) {
   const fr = oyun.fraksiyon[owner];
@@ -902,7 +1491,8 @@ function hesaplaNetGelirDetay(owner) {
   }, 0);
   const gider = ownerBakimToplami(owner);
   const pasifGelir = owner === "biz" ? arastirmaEfekt("pasifGelir") : 0;
-  const net = Math.round(gelir + pasifGelir - gider);
+  const haracGeliri = owner === "biz" ? haracGeliriTahminBiz() : 0;
+  const net = Math.round(gelir + pasifGelir + haracGeliri - gider);
   const detay = [
     `Temel gelir: ${Math.round(temelGelir)}₺`,
     `Yatırım bonusu: +${Math.round(yatirimBonusu)}₺`,
@@ -911,10 +1501,540 @@ function hesaplaNetGelirDetay(owner) {
     `Araştırma bonusu: +${Math.round(arastirmaBonusToplam)}₺`,
     `Gece ekonomisi: +${Math.round(geceBonusToplam)}₺`,
     `Pasif gelir: +${Math.round(pasifGelir)}₺`,
+    `Haraç geliri: +${Math.round(haracGeliri)}₺`,
     `Bakım gideri: -${Math.round(gider)}₺`,
     `Net: ${net >= 0 ? "+" : ""}${Math.round(net)}₺`,
   ].join("\n");
   return { net: net >= 0 ? `+${net}` : `${net}`, detay };
+}
+
+function diploAnlasmaEtiketi(tip) {
+  if (tip === "baris") return "Barış";
+  if (tip === "ateskes") return "Ateşkes";
+  if (tip === "ittifak") return "İttifak";
+  if (tip === "ticaret") return "Ticaret";
+  if (tip === "koalisyon") return "Koalisyon";
+  return tip;
+}
+
+function diploTeklifEtiketi(tip) {
+  if (tip === "baris") return "Barış";
+  if (tip === "ittifak") return "İttifak";
+  if (tip === "ticaret") return "Ticaret";
+  if (tip === "koalisyon") return "Koalisyon";
+  if (tip === "ittifak-mudahale") return "İttifak Müdahalesi";
+  return diploAnlasmaEtiketi(tip);
+}
+
+function diploTrendSembol(deger) {
+  const skala = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+  const oran = Math.max(0, Math.min(1, ((Number(deger) || 0) + 100) / 200));
+  const idx = Math.max(0, Math.min(skala.length - 1, Math.round(oran * (skala.length - 1))));
+  return skala[idx];
+}
+
+function diploTrendMetni(tarihce) {
+  const dizi = Array.isArray(tarihce) ? tarihce : [];
+  if (!dizi.length) return { spark: "—", ozet: "Trend verisi yok" };
+  const spark = dizi.map((x) => diploTrendSembol(x.deger)).join("");
+  const ilk = Math.round(dizi[0].deger || 0);
+  const son = Math.round(dizi[dizi.length - 1].deger || 0);
+  const delta = son - ilk;
+  const deltaStr = `${delta > 0 ? "+" : ""}${delta}`;
+  return { spark, ozet: `${ilk} → ${son} (${deltaStr})` };
+}
+
+function diploMiniGrafikSVG(tarihce = []) {
+  const dizi = Array.isArray(tarihce) ? tarihce.slice(-20) : [];
+  const w = 138;
+  const h = 44;
+  if (!dizi.length) {
+    return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">
+      <line x1="0" y1="${h / 2}" x2="${w}" y2="${h / 2}" stroke="rgba(255,255,255,.18)" stroke-width="1" />
+      <text x="${w / 2}" y="${h / 2 + 4}" text-anchor="middle" fill="#7f93a8" font-size="9">veri yok</text>
+    </svg>`;
+  }
+  const xAdim = dizi.length <= 1 ? w : (w / (dizi.length - 1));
+  const yFromVal = (v) => {
+    const oran = Math.max(0, Math.min(1, ((Number(v) || 0) + 100) / 200));
+    return h - (oran * h);
+  };
+  const path = dizi
+    .map((n, i) => `${i === 0 ? "M" : "L"} ${Number((i * xAdim).toFixed(2))} ${Number(yFromVal(n.deger).toFixed(2))}`)
+    .join(" ");
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">
+    <line x1="0" y1="${yFromVal(70).toFixed(2)}" x2="${w}" y2="${yFromVal(70).toFixed(2)}" stroke="rgba(102,255,154,.18)" stroke-width="1" />
+    <line x1="0" y1="${yFromVal(-30).toFixed(2)}" x2="${w}" y2="${yFromVal(-30).toFixed(2)}" stroke="rgba(247,178,103,.2)" stroke-width="1" />
+    <line x1="0" y1="${yFromVal(-70).toFixed(2)}" x2="${w}" y2="${yFromVal(-70).toFixed(2)}" stroke="rgba(255,125,125,.2)" stroke-width="1" />
+    <path d="${path}" fill="none" stroke="#74b9ff" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
+  </svg>`;
+}
+
+function diploGunlukFiltreEslesir(kod, filtre) {
+  if (!filtre || filtre === "tum") return true;
+  const deger = String(kod || "");
+  if (filtre === "savas") {
+    return deger.includes("savas") || deger.includes("fetih") || deger.includes("ateskes");
+  }
+  if (filtre === "anlasma") {
+    return deger.includes("ittifak") || deger.includes("ticaret") || deger.includes("baris") || deger.includes("anlasma");
+  }
+  if (filtre === "ihanet") {
+    return deger.includes("ihanet");
+  }
+  if (filtre === "koalisyon") {
+    return deger.includes("koalisyon");
+  }
+  return true;
+}
+
+export function diplomasiCiz(cb) {
+  const panel = document.getElementById("diplomasi");
+  if (!panel) return;
+
+  const ozet = diplomasiOzet("biz");
+  const gucSirasi = gucSiralamasiHesapla();
+  const aksiyonDurum = ozet.oyuncuAksiyon || { kullanildi: false, tip: null, hedef: null };
+  const aksiyonKilitli = !!aksiyonDurum.kullanildi;
+  const aksiyonHedefAd = aksiyonDurum.hedef ? (oyun.fraksiyon?.[aksiyonDurum.hedef]?.ad || aksiyonDurum.hedef) : "—";
+  const aktifAnlasmalar = Array.isArray(ozet.aktifAnlasmalar) ? ozet.aktifAnlasmalar : [];
+  const bekleyenTeklifler = Array.isArray(ozet.bekleyenTeklifler) ? ozet.bekleyenTeklifler : [];
+  const gunluk = Array.isArray(ozet.olayGunlugu) ? ozet.olayGunlugu : [];
+  let html = `<h3>🤝 Diplomasi Merkezi</h3>
+    <div class="diplo-itibar">
+      <strong>İtibar:</strong> ${Math.round(ozet.itibar)}/100
+      &nbsp; | &nbsp;
+      <strong>İhanet:</strong> ${ozet.ihanetSayisi}
+      <div class="diplo-itibar-cubuk"><div class="diplo-itibar-dolgu" style="width:${Math.round(ozet.itibar)}%"></div></div>
+    </div>
+    <div class="ipucu" style="margin:6px 0 10px 0;color:${aksiyonKilitli ? "#d9a969" : "#7eb98d"}">
+      ${aksiyonKilitli ? `Bu tur aksiyon kullanıldı: ${aksiyonDurum.tip || "aksiyon"} → ${aksiyonHedefAd}` : "Bu tur 1 diplomasi aksiyon hakkın var."}
+    </div>`;
+
+  if (ozet.koalisyon?.hedef) {
+    const hedefAd = oyun.fraksiyon?.[ozet.koalisyon.hedef]?.ad || ozet.koalisyon.hedef;
+    const uyeler = Array.isArray(ozet.koalisyon.uyeler) ? ozet.koalisyon.uyeler : [];
+    const uyeAdlari = uyeler.map((id) => oyun.fraksiyon?.[id]?.ad || id).join(", ") || "—";
+    const benHedefim = ozet.koalisyon.hedef === "biz";
+    const benUyeyim = uyeler.includes("biz");
+    html += `
+      <div style="margin:0 0 10px 0;padding:8px;border:1px solid ${benHedefim ? "rgba(255,122,122,.4)" : "rgba(120,180,255,.35)"};border-radius:8px;background:${benHedefim ? "rgba(86,18,18,.28)" : "rgba(16,28,48,.45)"}">
+        <strong style="font-size:12px;color:${benHedefim ? "#ffb4b4" : "#b8d8ff"}">${benHedefim ? "🚨 Koalisyon Seni Hedefliyor" : "⚡ Denge Koalisyonu Aktif"}</strong>
+        <div style="font-size:11px;color:#c8d7e6;margin-top:4px">Hedef: ${hedefAd}</div>
+        <div style="font-size:11px;color:#9eb5cc">Üyeler: ${uyeAdlari}</div>
+        <div style="font-size:11px;color:#9eb5cc">Ortak saldırı bonusu: +%${Math.round((DIPLOMASI.KOALISYON_SALDIRI_BONUS || 0) * 100)}${benUyeyim ? " (Sana aktif)" : ""}</div>
+      </div>`;
+  }
+
+  if (gucSirasi.length) {
+    html += `<div style="margin:0 0 10px 0;padding:8px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(10,16,24,.45)">
+      <strong style="font-size:12px">Güç Sıralaması</strong>`;
+    gucSirasi.forEach((s) => {
+      const ad = oyun.fraksiyon?.[s.owner]?.ad || s.owner;
+      html += `
+        <div style="margin-top:6px">
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:#c9d5e3">
+            <span>#${s.sira} ${ad}</span>
+            <span>${Math.round(s.puan)}</span>
+          </div>
+          <div style="height:5px;border-radius:4px;background:#1d2a3a;overflow:hidden">
+            <div style="height:100%;width:${Math.max(3, Math.round((s.pay || 0) * 100))}%;background:#4fa3ff"></div>
+          </div>
+        </div>`;
+    });
+    html += `</div>`;
+  }
+
+  html += `<div style="margin:0 0 10px 0;padding:8px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(10,16,24,.45)">
+    <strong style="font-size:12px">Aktif Anlaşmalar</strong>`;
+  if (!aktifAnlasmalar.length) {
+    html += `<div style="margin-top:6px;font-size:11px;color:#8fa2b7">Aktif anlaşma yok.</div>`;
+  } else {
+    aktifAnlasmalar.forEach((a) => {
+      const ownerAd = oyun.fraksiyon?.[a.owner]?.ad || a.owner;
+      const uyariRenk = a.uyari === "kritik" ? "#ff9f9f" : (a.uyari === "uyari" ? "#f7b267" : "#b9c9da");
+      const ekBilgi = a.tip === "ittifak"
+        ? `Bakım: ${a.bakim}₺/tur`
+        : a.tip === "ticaret"
+          ? `Gelir: +${a.ticaretGeliri}₺/tur`
+          : "";
+      html += `<div style="margin-top:6px;font-size:11px;color:${uyariRenk}">
+        ${diploAnlasmaEtiketi(a.tip)} · ${ownerAd} · ${a.kalan} tur kaldı ${ekBilgi ? `| ${ekBilgi}` : ""}
+      </div>`;
+    });
+  }
+  html += `</div>`;
+
+  html += `<div style="margin:0 0 10px 0;padding:8px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(10,16,24,.45)">
+    <strong style="font-size:12px">Bekleyen Teklifler</strong>`;
+  if (!bekleyenTeklifler.length) {
+    html += `<div style="margin-top:6px;font-size:11px;color:#8fa2b7">Bekleyen teklif yok.</div>`;
+  } else {
+    bekleyenTeklifler.forEach((t) => {
+      const ad = oyun.fraksiyon?.[t.gonderen]?.ad || t.gonderen;
+      const kalanRenk = t.kalan !== null && t.kalan <= 1 ? "#ff9f9f" : (t.kalan !== null && t.kalan <= 2 ? "#f7b267" : "#b7c9dd");
+      html += `<div style="margin-top:6px;padding:6px;border:1px solid rgba(255,255,255,.07);border-radius:7px;background:rgba(255,255,255,.02)">
+        <div style="font-size:11px;color:#d8e5f3">📩 ${ad} → ${diploTeklifEtiketi(t.tip)}</div>
+        <div style="font-size:11px;color:${kalanRenk}">⏱ ${t.kalan === null ? "Süre bilgisi yok" : `${t.kalan} tur içinde yanıtlanmalı`}</div>
+      </div>`;
+    });
+  }
+  html += `</div>`;
+
+  html += `<details style="margin:0 0 10px 0;padding:8px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(10,16,24,.45)">
+    <summary style="cursor:pointer;font-size:12px;color:#c9d8e7"><strong>Diplomasi Koşul Tablosu</strong></summary>
+    <div style="margin-top:8px;font-size:11px;color:#9eb1c5;line-height:1.45">
+      Ateşkes teklifi: ilişki ≤ -30.<br>
+      Barış anlaşması: ilişki ≤ -50.<br>
+      Normalleşme: -30 ile 0 arası.<br>
+      İttifak teklifi: ilişki ≥ +30.<br>
+      Savaş ilanı: tüm aktif anlaşmaları bozar ve ihanet sayılabilir.
+    </div>
+  </details>`;
+
+  html += `<div class="diplo-liste">`;
+  ozet.hedefler.forEach((h) => {
+    const ad = oyun.fraksiyon?.[h.owner]?.ad || h.owner;
+    const lider = oyun.fraksiyon?.[h.owner]?.lider || null;
+    const liderSatiri = lider
+      ? `<div style="font-size:11px;color:#9eb1c5">${liderProfilAdSatiriHTML(lider, 18)}</div>`
+      : "";
+    const trend = diploTrendMetni(h.tarihce);
+    const anlasmaSatiri = h.anlasmalar.length
+      ? h.anlasmalar
+          .map((a) => `<span class="diplo-anlasma">${diploAnlasmaEtiketi(a.tip)} · ${a.kalan}t</span>`)
+          .join("")
+      : `<span style="font-size:11px;color:#8899ad">Aktif anlaşma yok</span>`;
+    const rozetRenk =
+      h.durumRozet?.tip === "ittifak" ? "#8ef1b6"
+        : h.durumRozet?.tip === "baris" ? "#7ec7ff"
+          : h.durumRozet?.tip === "ateskes" ? "#f7d794"
+            : h.durumRozet?.tip === "savas" ? "#ff9f9f"
+              : "#9fb3c8";
+    html += `
+      <section class="diplo-satir">
+        <div class="diplo-ust">
+          <strong>${ad}</strong>
+          <span class="diplo-durum ${h.sinif}">${h.ikon} ${h.deger} (${h.etiket})</span>
+        </div>
+        ${liderSatiri}
+        <div style="margin:4px 0 4px 0">
+          <span style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;border:1px solid rgba(255,255,255,.18);font-size:10px;color:${rozetRenk}">
+            Durum: ${h.durumRozet?.ad || "Normal"}
+          </span>
+        </div>
+        <div style="font-size:11px;color:#96a7ba;margin-bottom:4px" title="Son 12 tur ilişki trendi">
+          Trend: <span style="font-family:monospace;letter-spacing:1px">${trend.spark}</span>
+          &nbsp; <span>${trend.ozet}</span>
+        </div>
+        <div style="margin:4px 0 6px 0">${diploMiniGrafikSVG(h.tarihce)}</div>
+        <div>${anlasmaSatiri}</div>
+        ${h.tehditKalan > 0 ? `<div style="font-size:11px;color:#c0a27a">Tehdit bekleme: ${h.tehditKalan} tur</div>` : ""}
+        <div class="diplo-btn-grid">
+          <button class="buton grimsi btn-diplo-baris" data-owner="${h.owner}" ${aksiyonKilitli ? "disabled" : ""}>Barış</button>
+          <button class="buton grimsi btn-diplo-savas" data-owner="${h.owner}" ${aksiyonKilitli ? "disabled" : ""}>Savaş İlanı</button>
+          <button class="buton grimsi btn-diplo-ittifak" data-owner="${h.owner}" ${aksiyonKilitli ? "disabled" : ""}>İttifak</button>
+          <button class="buton grimsi btn-diplo-ticaret" data-owner="${h.owner}" ${aksiyonKilitli ? "disabled" : ""}>Ticaret</button>
+          <button class="buton grimsi btn-diplo-rusvet" data-owner="${h.owner}" ${aksiyonKilitli ? "disabled" : ""}>Rüşvet</button>
+          <button class="buton grimsi btn-diplo-tehdit" data-owner="${h.owner}" ${aksiyonKilitli ? "disabled" : ""}>Tehdit</button>
+          <button class="buton grimsi btn-diplo-istihbarat" data-owner="${h.owner}" ${aksiyonKilitli ? "disabled" : ""}>İstihbarat</button>
+          <button class="buton grimsi btn-diplo-sabotaj" data-owner="${h.owner}" ${aksiyonKilitli ? "disabled" : ""}>Sabotaj</button>
+        </div>
+      </section>`;
+  });
+  html += `</div>`;
+
+  const filtreler = [
+    { id: "tum", ad: "Tümü" },
+    { id: "savas", ad: "Savaş/Saldırı" },
+    { id: "anlasma", ad: "Anlaşmalar" },
+    { id: "ihanet", ad: "İhanet" },
+    { id: "koalisyon", ad: "Koalisyon" },
+  ];
+  const filtreliGunluk = gunluk
+    .filter((g) => diploGunlukFiltreEslesir(g.kod, diploGunlukFiltre))
+    .slice(0, 14);
+  html += `<div class="diplo-tarihce"><strong>Diplomasi Günlüğü</strong>
+    <div style="margin:6px 0 6px 0;display:flex;gap:6px;flex-wrap:wrap">`;
+  filtreler.forEach((f) => {
+    html += `<button class="buton grimsi btn-diplo-log-filtre" data-filtre="${f.id}" ${diploGunlukFiltre === f.id ? 'style="border-color:#4fa3ff;color:#d8ebff"' : ""}>${f.ad}</button>`;
+  });
+  html += `</div>`;
+  if (!filtreliGunluk.length) {
+    html += `<div style="color:#8f9eb1;margin-top:4px">Henüz kayıt yok.</div>`;
+  } else {
+    filtreliGunluk.forEach((g) => {
+      html += `<div>[Tur ${g.tur}] ${g.mesaj}</div>`;
+    });
+  }
+  html += `</div>`;
+
+  panel.innerHTML = html;
+
+  panel.querySelectorAll(".btn-diplo-baris").forEach((btn) => {
+    btn.onclick = () => cb.diplomasiBarisTeklif(btn.getAttribute("data-owner"));
+  });
+  panel.querySelectorAll(".btn-diplo-savas").forEach((btn) => {
+    btn.onclick = () => cb.diplomasiSavasIlan(btn.getAttribute("data-owner"));
+  });
+  panel.querySelectorAll(".btn-diplo-ittifak").forEach((btn) => {
+    btn.onclick = () => cb.diplomasiIttifakTeklif(btn.getAttribute("data-owner"));
+  });
+  panel.querySelectorAll(".btn-diplo-ticaret").forEach((btn) => {
+    btn.onclick = () => cb.diplomasiTicaretTeklif(btn.getAttribute("data-owner"));
+  });
+  panel.querySelectorAll(".btn-diplo-rusvet").forEach((btn) => {
+    btn.onclick = () => cb.diplomasiRusvetVer(btn.getAttribute("data-owner"));
+  });
+  panel.querySelectorAll(".btn-diplo-tehdit").forEach((btn) => {
+    btn.onclick = () => cb.diplomasiTehditEt(btn.getAttribute("data-owner"));
+  });
+  panel.querySelectorAll(".btn-diplo-istihbarat").forEach((btn) => {
+    btn.onclick = () => cb.diplomasiIstihbaratPaylas(btn.getAttribute("data-owner"));
+  });
+  panel.querySelectorAll(".btn-diplo-sabotaj").forEach((btn) => {
+    btn.onclick = () => cb.diplomasiSabotajTeklif(btn.getAttribute("data-owner"));
+  });
+  panel.querySelectorAll(".btn-diplo-log-filtre").forEach((btn) => {
+    btn.onclick = () => {
+      diploGunlukFiltre = btn.getAttribute("data-filtre") || "tum";
+      diplomasiCiz(cb);
+    };
+  });
+}
+
+function ownerRenk(owner) {
+  if (owner === "biz") return "#2ecc71";
+  if (owner === "ai1") return "#e74c3c";
+  if (owner === "ai2") return "#9b59b6";
+  if (owner === "ai3") return "#f1c40f";
+  return "#95a5a6";
+}
+
+function ownerToplamBirim(owner) {
+  return oyun.birimler
+    .filter((b) => b.owner === owner && !b._sil)
+    .reduce((toplam, b) => toplam + (b.adet || 0), 0);
+}
+
+function liderBonusAlanAdi(alan) {
+  const map = {
+    saldiriGucu: "Saldırı",
+    savunmaGucu: "Savunma",
+    binaMaliyetiIndirim: "İnşa İndirimi",
+    gelirCarpani: "Gelir",
+    adamCarpani: "Adam Üretimi",
+    kayipAzaltma: "Kayıp Azaltma",
+    regenBonus: "Nüfus Yenilenme",
+  };
+  return map[alan] || alan;
+}
+
+function liderBonusSatirlari(lider) {
+  if (!lider?.bonus || typeof lider.bonus !== "object") return [];
+  return Object.entries(lider.bonus)
+    .filter(([, v]) => Number.isFinite(v))
+    .map(([alan, deger]) => ({
+      alan,
+      ad: liderBonusAlanAdi(alan),
+      deger,
+      yuzde: Math.round(Math.abs(deger) * 100),
+      iyi: deger >= 0,
+    }));
+}
+
+function liderBonusOzeti(lider) {
+  const satirlar = liderBonusSatirlari(lider)
+    .map((s) => `${s.ad} ${s.deger >= 0 ? "+" : "-"}%${s.yuzde}`);
+  return satirlar.length ? satirlar.join(" • ") : "Bonus yok";
+}
+
+function liderPuanRozetHTML(s) {
+  const arka = s.iyi ? "rgba(46, 204, 113, .18)" : "rgba(231, 76, 60, .18)";
+  const kenar = s.iyi ? "rgba(46, 204, 113, .38)" : "rgba(231, 76, 60, .38)";
+  const renk = s.iyi ? "#8ef1b6" : "#ff9f9f";
+  return `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:999px;border:1px solid ${kenar};background:${arka};color:${renk};font-size:10px;font-weight:700">${htmlEsc(s.ad)} ${s.deger >= 0 ? "+" : "-"}%${s.yuzde}</span>`;
+}
+
+function liderIyiKotuPuanHTML(lider, baslik = "Lider Puanları") {
+  const satirlar = liderBonusSatirlari(lider);
+  const iyiler = satirlar.filter((s) => s.iyi);
+  const kotuler = satirlar.filter((s) => !s.iyi);
+  const iyiHTML = iyiler.length ? iyiler.map(liderPuanRozetHTML).join("") : `<span style="font-size:10px;color:#6f8ba4">Yok</span>`;
+  const kotuHTML = kotuler.length ? kotuler.map(liderPuanRozetHTML).join("") : `<span style="font-size:10px;color:#6f8ba4">Yok</span>`;
+  return `
+    <div style="margin-top:7px;padding:7px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(7,13,20,.45)">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:5px">
+        <strong style="font-size:11px;color:#d5e3f2">${baslik}</strong>
+        <span style="font-size:10px;color:#8ba4bb">Salt okunur</span>
+      </div>
+      <div style="font-size:10px;color:#8ef1b6;margin-bottom:3px">İyi puanlar</div>
+      <div style="display:flex;flex-wrap:wrap;gap:5px">${iyiHTML}</div>
+      <div style="font-size:10px;color:#ffabab;margin:6px 0 3px">Kötü puanlar</div>
+      <div style="display:flex;flex-wrap:wrap;gap:5px">${kotuHTML}</div>
+    </div>`;
+}
+
+function liderOzelligiVarMi(lider) {
+  const ozellik = String(lider?.ozellik || "").trim();
+  if (!ozellik) return false;
+  const norm = ozellik.toLowerCase();
+  return norm !== "yok" && norm !== "-" && norm !== "none";
+}
+
+function liderProfilAdSatiriHTML(lider, boyut = 20) {
+  if (!lider) return "Lider yok";
+  const ikon = liderOzelligiVarMi(lider) && lider.ikon ? `${htmlEsc(lider.ikon)} ` : "";
+  return `${liderAvatarHTML(lider, boyut)}${ikon}${htmlEsc(lider.ad || "Lider")}`;
+}
+
+function profilDiploRenk(sinif) {
+  if (sinif === "ittifak") return "#8ef1b6";
+  if (sinif === "dostluk") return "#9ce5b3";
+  if (sinif === "gerilim") return "#ffbf7a";
+  if (sinif === "savas") return "#ff9f9f";
+  return "#c7d5e3";
+}
+
+function profilIliskiDurumHTML(owner) {
+  const ozet = diplomasiOzet(owner);
+  const hedefler = Array.isArray(ozet?.hedefler) ? ozet.hedefler : [];
+  if (!hedefler.length) {
+    return `
+      <div style="margin-top:8px;padding:8px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(7,13,20,.45)">
+        <div style="font-size:11px;color:#d5e3f2;font-weight:700">Çetelerle Durum</div>
+        <div style="font-size:11px;color:#8fa4b8;margin-top:4px">Diplomasi verisi yok.</div>
+      </div>`;
+  }
+
+  const satirlar = hedefler.map((h) => {
+    const hedefAd = oyun.fraksiyon?.[h.owner]?.ad || h.owner;
+    const deger = Math.round(Number(h.deger) || 0);
+    const anlasmalar = Array.isArray(h.anlasmalar) ? h.anlasmalar : [];
+    const anlasmaMetni = anlasmalar.length
+      ? anlasmalar
+        .map((a) => `${diploAnlasmaEtiketi(a.tip)} (${Math.max(0, Math.round(a.kalan || 0))} tur)`)
+        .join(" • ")
+      : "Aktif anlaşma yok";
+    return `
+      <div style="margin-top:6px;padding:6px 7px;border:1px solid rgba(255,255,255,.08);border-radius:7px;background:rgba(255,255,255,.02)">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <strong style="font-size:11px;color:#dce8f5">${htmlEsc(hedefAd)}</strong>
+          <span style="font-size:11px;color:${profilDiploRenk(h.sinif)}">${htmlEsc(h.ikon || "⚪")} ${htmlEsc(h.etiket || "Tarafsız")} (${deger})</span>
+        </div>
+        <div style="font-size:10px;color:#93a8bd;margin-top:3px">${htmlEsc(anlasmaMetni)}</div>
+      </div>`;
+  }).join("");
+
+  return `
+    <div style="margin-top:8px;padding:8px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(7,13,20,.45)">
+      <div style="font-size:11px;color:#d5e3f2;font-weight:700">Çetelerle Durum</div>
+      ${satirlar}
+    </div>`;
+}
+
+function profilPanelIcerikHTML(bolgeId = oyun.seciliId) {
+  const secili = bolgeById(bolgeId);
+  if (!secili || secili.owner === "tarafsiz") {
+    return `<h3>👤 Bölge Profili</h3><p class="ipucu">Sahipli bir bölge seçip aynı bölgeye ikinci kez tıkla; lider profili solda açılır.</p>`;
+  }
+
+  const owner = secili.owner;
+  const fr = oyun.fraksiyon?.[owner];
+  if (!fr) {
+    return `<h3>👤 Bölge Profili</h3><p class="ipucu">Profil verisi bulunamadı.</p>`;
+  }
+  const lider = fr.lider || null;
+  const guc = gucSiralamasiHesapla().find((g) => g.owner === owner)?.puan ?? 0;
+  const bolge = oyun.bolgeler.filter((b) => b.owner === owner).length;
+  const birim = ownerToplamBirim(owner);
+  const para = Math.round(fr.para || 0);
+  const bizFr = oyun.fraksiyon?.biz;
+  const bizLider = bizFr?.lider || null;
+
+  let html = `<h3>👤 Bölge Profili</h3>
+    <p class="ipucu">Seçili bölge: <strong>${htmlEsc(secili.ad || "")}</strong> • Kontrol: ${htmlEsc(fr.ad || owner)}</p>
+    <section style="margin:10px 0;padding:10px;border:1px solid rgba(255,255,255,.1);border-radius:8px;background:rgba(10,16,24,.45)">
+      <div style="font-size:11px;color:#9fb3c5;margin-bottom:6px">Bölgeyi yöneten çete lideri</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <strong style="color:${ownerRenk(owner)}">${htmlEsc(fr.ad || owner)}</strong>
+        <span style="font-size:11px;color:#9fb3c5">Güç: ${Math.round(guc)}</span>
+      </div>
+      <div style="margin-top:5px;font-size:12px;color:#d8e3ee">
+        ${liderProfilAdSatiriHTML(lider, 20)}
+        ${lider?.lakap ? `<span style="color:#93a7bc"> • ${htmlEsc(lider.lakap)}</span>` : ""}
+      </div>
+      <div style="margin-top:4px;font-size:11px;color:#9eb1c5">
+        Köken: ${htmlEsc(lider?.koken || "—")} • Özellik: ${htmlEsc(lider?.ozellik || "—")}
+      </div>
+      <div style="margin-top:4px;font-size:11px;color:#8fa4b8">${htmlEsc(liderBonusOzeti(lider))}</div>
+      ${liderIyiKotuPuanHTML(lider, "İyi/Kötü Profil Puanları")}
+      <div style="margin-top:6px;font-size:11px;color:#b7c7d8">
+        Bölge: ${bolge} • Birim: ${birim} • Para: ${para} ₺
+      </div>
+      ${profilIliskiDurumHTML(owner)}`;
+
+  if (owner !== "biz" && bizFr && bizLider) {
+    html += `
+      <div style="margin-top:10px;padding-top:8px;border-top:1px dashed rgba(255,255,255,.14)">
+        <div style="font-size:11px;color:#bfcddd;margin-bottom:6px">Senin çete liderin</div>
+        <div style="font-size:12px;color:#d8e3ee">
+          ${liderProfilAdSatiriHTML(bizLider, 20)}
+          ${bizLider?.lakap ? `<span style="color:#93a7bc"> • ${htmlEsc(bizLider.lakap)}</span>` : ""}
+        </div>
+        <div style="margin-top:4px;font-size:11px;color:#9eb1c5">
+          Köken: ${htmlEsc(bizLider?.koken || "—")} • Özellik: ${htmlEsc(bizLider?.ozellik || "—")}
+        </div>
+        <div style="margin-top:4px;font-size:11px;color:#8fa4b8">${htmlEsc(liderBonusOzeti(bizLider))}</div>
+        ${liderIyiKotuPuanHTML(bizLider, "Senin İyi/Kötü Puanların")}
+      </div>`;
+  }
+
+  if (fr) {
+    const ozelLider = lider || { ad: "", lakap: "", ikon: "👤" };
+    const emojiOzelligiAcik = liderOzelligiVarMi(ozelLider);
+    html += `
+      <div style="margin-top:10px;padding-top:8px;border-top:1px dashed rgba(255,255,255,.14)">
+        <div style="font-size:11px;color:#bfcddd;margin-bottom:6px">Kişiselleştirme (${htmlEsc(fr.ad || owner)})</div>
+        <input id="profil-owner" type="hidden" value="${htmlEsc(owner)}">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          <input id="profil-cete-ad" class="input" maxlength="26" placeholder="Çete adı" value="${htmlEsc(fr.ad || "")}">
+          <input id="profil-lider-ad" class="input" maxlength="26" placeholder="Çete lideri adı" value="${htmlEsc(ozelLider.ad || "")}">
+          <input id="profil-lider-lakap" class="input" maxlength="36" placeholder="Lider lakabı" value="${htmlEsc(ozelLider.lakap || "")}">
+          ${emojiOzelligiAcik
+            ? `<input id="profil-lider-ikon" class="input" maxlength="3" placeholder="İkon (örn: 👑)" value="${htmlEsc(ozelLider.ikon || "")}">`
+            : `<div style="padding:9px 11px;border-radius:8px;border:1px dashed rgba(255,255,255,.18);background:rgba(255,255,255,.04);font-size:11px;color:#9db2c8">Emoji kapalı (lider özelliği yok)</div>`
+          }
+        </div>
+        <div style="font-size:10px;color:#8fa4b8;margin-top:6px">İyi/Kötü puanlar yukarıda renkli ve salt okunur gösterilir; düzenlenemez.</div>
+        <button class="buton" id="btn-profil-kaydet" style="margin-top:8px">Profili Kaydet</button>
+      </div>`;
+  }
+  html += `</section>`;
+  return html;
+}
+
+function profilYanMenuGuncel(cb, bolgeId = oyun.seciliId) {
+  const panel = document.getElementById("profil-sol-menu-icerik");
+  if (!panel) return;
+  panel.innerHTML = profilPanelIcerikHTML(bolgeId);
+  const kaydetBtn = panel.querySelector("#btn-profil-kaydet");
+  if (kaydetBtn) {
+    kaydetBtn.onclick = () => {
+      if (typeof cb.profilOzellestirmeKaydet !== "function") return;
+      const hedefOwner =
+        panel.querySelector("#profil-owner")?.value
+        || bolgeById(bolgeId)?.owner
+        || "biz";
+      cb.profilOzellestirmeKaydet({
+        hedefOwner,
+        ceteAdi: panel.querySelector("#profil-cete-ad")?.value || "",
+        liderAd: panel.querySelector("#profil-lider-ad")?.value || "",
+        liderLakap: panel.querySelector("#profil-lider-lakap")?.value || "",
+        liderIkon: panel.querySelector("#profil-lider-ikon")?.value || "",
+      });
+    };
+  }
 }
 
 export function durumCiz() {
@@ -924,11 +2044,20 @@ export function durumCiz() {
   const biz = oyun.fraksiyon.biz;
   const lider = biz.lider;
   const asayis = oyun.asayis || { sucluluk: 0, polisBaski: 0, sonBaskinTur: -999 };
+  const eco = ekonomiDurumuUi();
+  const harac = aktifHaracSeviyesiUi();
+  const haracGelir = haracGeliriTahminBiz();
+  const yoldaBizToplam = oyun.birimler
+    .filter((k) => k.owner === "biz" && !k._sil && k.hedefId && !k.bekliyor && (k.adet || 0) > 0)
+    .reduce((toplam, k) => toplam + (k.adet || 0), 0);
   const yaraliToplam = oyun.yaralilar.filter((y) => y.owner === "biz").reduce((t, y) => t + y.adet, 0);
   const esirToplam = oyun.esirler.filter((e) => e.owner === "biz").reduce((t, e) => t + e.adet, 0);
+  const ilAi1 = iliskiDurumu("biz", "ai1");
+  const ilAi2 = iliskiDurumu("biz", "ai2");
+  const ilAi3 = iliskiDurumu("biz", "ai3");
   sol.innerHTML = `
     <span class="etiket">Çetemiz:</span> <span id="biz-adi">${biz.ad}</span>
-    &nbsp; | &nbsp; <span class="etiket">Lider:</span> ${lider ? `${lider.ikon} ${lider.ad}` : '—'}
+    &nbsp; | &nbsp; <span class="etiket">Lider:</span> ${lider ? liderProfilAdSatiriHTML(lider, 20) : '—'}
     &nbsp; | &nbsp; <span class="etiket">Para:</span> ${Math.floor(biz.para)} ₺
     ${yaraliToplam > 0 ? `&nbsp; | &nbsp; <span style="color:#f39c12">🩹 ${yaraliToplam}</span>` : ''}
     ${esirToplam > 0 ? `&nbsp; | &nbsp; <span style="color:#e74c3c">⛓️ ${esirToplam}</span>` : ''}
@@ -939,18 +2068,25 @@ export function durumCiz() {
       ? `<span style="color:#f5c542;font-weight:600">Hedef seç: ${oyun.hareketEmri.adet} asker gönderiliyor...</span> &nbsp; | &nbsp;`
       : ""
     }
+  ${yoldaBizToplam > 0
+      ? `<span style="color:#9ed0ff;font-weight:600">Yolda: ${yoldaBizToplam}</span> &nbsp; | &nbsp;`
+      : ""
+    }
 
   <span class="etiket">Bizim Bölge:</span> ${bizBolgeSayisi()}
   &nbsp; | &nbsp; <span class="etiket">Tur:</span> ${oyun.tur}
   &nbsp; | &nbsp; <span class="etiket">Hız:</span> ${Number(
       oyun.hizKatsayi
     ).toFixed(2)}×
+  &nbsp; | &nbsp; <span class="etiket">Harita:</span> ${HARITA_MODLARI[aktifHaritaModu]?.ad || "Siyasi"} ${haritaModUstKontrolHTML()}
   &nbsp; | &nbsp; <span class="etiket">Şöhret:</span> ${Math.round(
       oyun.sohret.biz
     )}/100
   &nbsp; | &nbsp; <span class="etiket" title="Suçluluk arttıkça polis baskın riski yükselir.">Suç:</span> ${Math.round(asayis.sucluluk || 0)}
   &nbsp; | &nbsp; <span class="etiket" title="Polis baskısı yüksekse ceza ve taşıt el koyma riski artar.">Polis:</span> %${Math.round(asayis.polisBaski || 0)}
+  &nbsp; | &nbsp; <span class="etiket" title="Seviye: ${harac.ad} | Gelir x${harac.gelirCarpani.toFixed(2)} | Sadakat ${harac.sadakatDelta >= 0 ? "+" : ""}${harac.sadakatDelta.toFixed(2)}/tur | Suç ${harac.suclulukDelta >= 0 ? "+" : ""}${harac.suclulukDelta.toFixed(2)}/tur">Haraç:</span> ${harac.ad} (+${Math.round(eco.sonHaracGeliri || haracGelir)}₺)
   &nbsp; | &nbsp; <span class="etiket" title="${netGelir.detay.replace(/"/g, "&quot;")}">Net:</span> <span title="${netGelir.detay.replace(/"/g, "&quot;")}">${netGelir.net}</span>
+  &nbsp; | &nbsp; <span class="etiket">Diplo:</span> ${ilAi1.ikon}${Math.round(ilAi1.deger)} / ${ilAi2.ikon}${Math.round(ilAi2.deger)} / ${ilAi3.ikon}${Math.round(ilAi3.deger)}
   &nbsp; | &nbsp; <button class="buton grimsi" id="pause-btn">${oyun.duraklat ? "Devam Et" : "Duraklat"
     }</button>
   &nbsp; <button class="buton grimsi" id="tutorial-btn">📘 Tutorial</button>
@@ -989,11 +2125,13 @@ function istanbulSvgOlustur(onBolgeSec) {
   
   svgKap = document.createElement("div");
   svgKap.id = "istanbul-svg-kap";
+  svgKap.setAttribute("data-mod", aktifHaritaModu);
   kap.appendChild(svgKap);
   
   const NS = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(NS, "svg");
   svg.id = "istanbul-svg";
+  svg.setAttribute("data-mod", aktifHaritaModu);
   istanbulKameraSifirla();
   istanbulViewBoxUygula(svg);
   svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
@@ -1096,23 +2234,43 @@ function istanbulSvgOlustur(onBolgeSec) {
     label.setAttribute("data-id", b.id);
     label.setAttribute("data-label-id", b.id);
     label.setAttribute("dominant-baseline", "middle");
-    label.textContent = b.ad;
+    const baslangicBilgi = bolgeEtiketIstihbaratMetni(b, "normal");
+    label.textContent = baslangicBilgi ? `${b.ad} ${baslangicBilgi}` : b.ad;
     istanbulLabelCache.set(b.id, label);
     labelGrup.appendChild(label);
-    
+
+    const hareketIndikator = document.createElementNS(NS, "text");
+    hareketIndikator.setAttribute("x", cx);
+    hareketIndikator.setAttribute("y", cy + 9);
+    hareketIndikator.setAttribute("class", "ilce-hareket-indikator");
+    hareketIndikator.setAttribute("data-hareket-id", b.id);
+    hareketIndikator.setAttribute("text-anchor", "middle");
+    hareketIndikator.textContent = "";
+    istanbulHareketCache.set(b.id, hareketIndikator);
+    labelGrup.appendChild(hareketIndikator);
   });
   svg.appendChild(labelGrup);
   
   svgKap.appendChild(svg);
+  haritaModKisayolBagla();
+  haritaModEfsaneGuncelle();
   istanbulEtiketTipografiGuncelle();
   requestAnimationFrame(() => {
     ilceEtiketleriniPoligonaHizala(svg, true);
   });
   istanbulZoomKontrolOlustur(svgKap, svg);
   istanbulEtkilesimBagla(svgKap, svg, onBolgeSec);
+  istanbulSvgGuncel();
 }
 
 function istanbulSvgGuncel() {
+  const mod = HARITA_MODLARI[aktifHaritaModu] ? aktifHaritaModu : "siyasi";
+  const degerler = mod === "siyasi"
+    ? []
+    : oyun.bolgeler.map((b) => bolgeMetrikDegeri(b, mod)).filter((v) => Number.isFinite(v));
+  const min = degerler.length ? Math.min(...degerler) : 0;
+  const max = degerler.length ? Math.max(...degerler) : 0;
+
   oyun.bolgeler.forEach(b => {
     const ilce = ISTANBUL_ILCELER[b.id];
     if (!ilce) return;
@@ -1122,14 +2280,46 @@ function istanbulSvgGuncel() {
     if (path && !istanbulPathCache.has(b.id)) istanbulPathCache.set(b.id, path);
     if (path) {
       path.setAttribute("class", `ilce-path ${ownerSinif(b.owner)} ${oyun.seciliId === b.id ? "secili" : ""}`);
+      const fill = bolgeRenkHesapla(b, mod, min, max);
+      if (fill) path.style.fill = fill;
+      else path.style.removeProperty("fill");
       // Tooltip güncelle
       const title = path.querySelector("title");
       if (title) {
         title.textContent = bolgeTooltipMetni(b);
       }
     }
-    
+
+    const hareketEl = istanbulHareketCache.get(b.id)
+      || document.querySelector(`text[data-hareket-id="${b.id}"]`);
+    if (hareketEl && !istanbulHareketCache.has(b.id)) istanbulHareketCache.set(b.id, hareketEl);
+    if (hareketEl) {
+      const gidenler = oyun.birimler.filter(
+        (u) => u.konumId === b.id && u.hedefId && u.hedefId !== b.id && (u.adet || 0) > 0
+      );
+      const istihbaratGizli = mod !== "siyasi" && dusmanIstihbaratiGizliMi(b);
+      const ikon = konvoyDurumIkonu(gidenler);
+      const toplam = gidenler.reduce((t, u) => t + (u.adet || 0), 0);
+      const tahminiTur = konvoyGrubuTahminiTurMetni(gidenler);
+      let metin = "";
+      if (ikon) {
+        if (mod === "askeri" && !istihbaratGizli) {
+          metin = `${ikon}${toplam}`;
+        } else if (mod !== "askeri") {
+          metin = ikon;
+        }
+      }
+      hareketEl.textContent = metin;
+      hareketEl.style.opacity = metin ? "0.95" : "0";
+      if (ikon) {
+        const title = tahminiTur ? `Birlik hareketi • ${tahminiTur} sonra varış` : "Birlik hareketi";
+        hareketEl.setAttribute("title", title);
+      } else {
+        hareketEl.removeAttribute("title");
+      }
+    }
   });
+  haritaModEfsaneGuncelle();
   istanbulEtiketTipografiGuncelle();
 }
 
@@ -1185,7 +2375,7 @@ export function haritaCiz(onBolgeSec) {
         regenBonus: "Nüfus Artışı"
       };
       const bonusAd = bonusMap[Object.keys(l.bonus)[0]] || "Bilinmiyor";
-      liderBilgi = `<br><span style="color:#ddd;font-size:0.9em">Lider: ${l.ikon} ${l.ad} (${bonusAd})</span>`;
+      liderBilgi = `<br><span style="color:#ddd;font-size:0.9em">Lider: ${liderProfilAdSatiriHTML(l, 16)} (${bonusAd})</span>`;
     }
 
     const renk = { biz: "#2ecc71", ai1: "#e74c3c", ai2: "#9b59b6", ai3: "#f1c40f", tarafsiz: "#999" }[b.owner] || "#999";
@@ -1206,7 +2396,7 @@ export function haritaCiz(onBolgeSec) {
         <div>Gelir: ${b.gelir} <span style="color:#777">(+${b.yGel} yat.)</span></div>
         <div>Güvenlik: ${b.guv} <span style="color:#777">(+${b.yGuv} yat.)</span></div>
         <div>Nüfus: ${Math.floor(b.nufus)}/${b.nufusMax} <span style="color:#777">(+${b.yAdam} yat.)</span></div>
-        <div>Garnizon: <strong>${b.garnizon || 0}</strong></div>
+        <div>Garnizon: <strong>${bolgeHazirBirimSayisi(b.id, b.owner)}</strong></div>
         <div>Birim Tipleri: <span style="color:#ddd">${tipIkonOzet(b.id, b.owner) || "Yok"}</span></div>
       `;
 
@@ -1223,7 +2413,14 @@ export function haritaCiz(onBolgeSec) {
     k.onclick = (e) => {
       // mini aksiyon varsa ve butona basıldıysa, kare seçimini tetiklemeyelim
       if (e.target && e.target.classList.contains("mini-aksiyon")) return;
-      onBolgeSec(b.id);
+      onBolgeSec(b.id, { shiftKey: !!e.shiftKey, kaynak: "grid-click" });
+    };
+    k.ondblclick = () => {
+      onBolgeSec(b.id, { dblclick: true, kaynak: "grid-dblclick" });
+    };
+    k.oncontextmenu = (e) => {
+      e.preventDefault();
+      haritaContextMenuAc(e.clientX, e.clientY, b.id, onBolgeSec);
     };
     h.appendChild(k);
   });
@@ -1287,8 +2484,12 @@ export function haritaGuncel() {
       badge.className = "konvoy-badge";
       const hedefAd = bolgeById(gidenler[0].hedefId)?.ad || "?";
       const tipRozet = konvoyTipRozeti(gidenler);
-      badge.textContent = `🚶 ${toplam} ${tipRozet} → ${hedefAd}`;
-      badge.title = `${tipRozet || toplam} ${hedefAd} bölgesine gidiyor`;
+      const ikon = konvoyDurumIkonu(gidenler);
+      const tahminiTur = konvoyGrubuTahminiTurMetni(gidenler);
+      badge.textContent = `${ikon || "▶"} ${toplam} ${tipRozet} → ${hedefAd}`;
+      badge.title = tahminiTur
+        ? `${tipRozet || toplam} ${hedefAd} bölgesine gidiyor • ${tahminiTur} sonra varış`
+        : `${tipRozet || toplam} ${hedefAd} bölgesine gidiyor`;
       k.appendChild(badge);
     }
 
@@ -1302,8 +2503,12 @@ export function haritaGuncel() {
       const badge = document.createElement("div");
       badge.className = `konvoy-badge ${dost ? '' : 'gelen'}`;
       const tipRozet = konvoyTipRozeti(gelenler);
-      badge.textContent = dost ? `🛡️ ← ${toplam} ${tipRozet}` : `⚔️ ← ${toplam} ${tipRozet}`;
-      badge.title = `${tipRozet || toplam} bu bölgeye geliyor`;
+      const ikon = konvoyDurumIkonu(gelenler);
+      const tahminiTur = konvoyGrubuTahminiTurMetni(gelenler);
+      badge.textContent = dost ? `${ikon || "🛡️"} ← ${toplam} ${tipRozet}` : `⚔️ ← ${toplam} ${tipRozet}`;
+      badge.title = tahminiTur
+        ? `${tipRozet || toplam} bu bölgeye geliyor • ${tahminiTur} içinde varış`
+        : `${tipRozet || toplam} bu bölgeye geliyor`;
       k.appendChild(badge);
     }
 
@@ -1329,10 +2534,12 @@ export function haritaGuncel() {
 }
 export function uiGuncel(cb) {
   aktifCallbacklar = cb;
+  haritaContextMenuKapat();
   durumCiz();
   haritaGuncel();
   detayCiz();
   islemlerCiz(cb);
+  diplomasiCiz(cb);
 
   // İstatistik panelini göster (oyun başladıysa)
   const statPanel = document.getElementById("istatistik-panel");
@@ -1352,9 +2559,11 @@ export function uiGuncel(cb) {
       document.dispatchEvent(new CustomEvent("tutorial:open"));
     };
   }
+  haritaModUstKontrolBagla();
 
   // Ayarlar modalı hazırla + bağla
   ensureAyarModal();
+  ensureProfilYanMenu();
   ensureArastirmaSayfa();
   const arastirmaBtn = document.getElementById("arastirma-sayfa-btn");
   if (arastirmaBtn) arastirmaBtn.onclick = arastirmaSayfaAc;
@@ -1378,7 +2587,27 @@ export function uiGuncel(cb) {
     };
   }
 
+  const seciliProfilBolge = bolgeById(oyun.seciliId);
+  if (seciliProfilBolge && seciliProfilBolge.owner !== "tarafsiz") {
+    const ayniProfilBolgesi = profilSonAcilanBolgeId === seciliProfilBolge.id;
+    const acilisTalebiVar = profilAcilisTalepBolgeId === seciliProfilBolge.id;
+    if (acilisTalebiVar) {
+      profilSonAcilanBolgeId = seciliProfilBolge.id;
+      profilYanMenuAc(cb, seciliProfilBolge.id);
+      profilAcilisTalepBolgeId = null;
+    } else if (profilMenuAcik && ayniProfilBolgesi) {
+      profilYanMenuGuncel(cb, seciliProfilBolge.id);
+    } else if (profilMenuAcik && !ayniProfilBolgesi) {
+      profilYanMenuKapat();
+    }
+  } else {
+    profilAcilisTalepBolgeId = null;
+    profilSonAcilanBolgeId = null;
+    if (profilMenuAcik) profilYanMenuKapat();
+  }
   if (arastirmaSayfaAcik) arastirmaSayfaGuncel();
+  haritaModKisayolBagla();
+  duraklatKisayolBagla();
   document.dispatchEvent(new CustomEvent("ui:guncel"));
 }
 
@@ -1386,16 +2615,29 @@ export function detayCiz() {
   const d = document.getElementById("detay");
   const b = bolgeById(oyun.seciliId);
   if (!b) {
-    d.innerHTML = `<h2>Bölge Bilgisi</h2><p>Soldan bir bölge seç.</p>`;
+    const biz = oyun.fraksiyon?.biz;
+    const bizBolge = oyun.bolgeler.filter((x) => x.owner === "biz").length;
+    const bizBirim = ownerToplamBirim("biz");
+    d.innerHTML = `
+      <h2>Genel Bakış</h2>
+      <p>Haritadan bir bölge seçerek detay açabilirsin.</p>
+      <p><strong>Çete:</strong> ${htmlEsc(biz?.ad || "Biz")}</p>
+      <p><strong>Bölge:</strong> ${bizBolge} • <strong>Birim:</strong> ${bizBirim} • <strong>Para:</strong> ${Math.round(biz?.para || 0)} ₺</p>
+      <p class="ipucu">Sahipli bir bölgeye ikinci kez tıkladığında solda o bölgenin lider profili açılır.</p>
+    `;
     return;
   }
   const kesifVar = kesifAktifMi(b.id);
   const istihbaratGerekli = b.owner !== "biz" && b.owner !== "tarafsiz" && !kesifVar;
+  const bolgeLider = b.owner !== "tarafsiz" ? oyun.fraksiyon?.[b.owner]?.lider : null;
+  const liderSatiri = bolgeLider
+    ? `<p><strong>Lider:</strong> ${liderProfilAdSatiriHTML(bolgeLider, 16)}${bolgeLider.lakap ? ` <span style="color:#9cb0c3">(${htmlEsc(bolgeLider.lakap)})</span>` : ""}</p>`
+    : "";
   const guvTop = b.guv + b.yGuv;
   const gelX = (1 + b.yGel * 0.5).toFixed(1);
   const adamX = (1 + b.yAdam * 0.7).toFixed(1);
   let ek = b.owner !== "tarafsiz" && !istihbaratGerekli
-    ? `<p><strong>Garnizon:</strong> ${b.garnizon}</p><p><strong>Birim Tipleri:</strong> ${tipIkonOzet(b.id, b.owner) || "Yok"}</p>`
+    ? `<p><strong>Garnizon:</strong> ${bolgeHazirBirimSayisi(b.id, b.owner)}</p><p><strong>Birim Tipleri:</strong> ${tipIkonOzet(b.id, b.owner) || "Yok"}</p>`
     : "";
   // Özel bölge bilgisi
   let ozelEk = '';
@@ -1457,6 +2699,7 @@ export function detayCiz() {
   d.innerHTML = `
     <h2>${b.ad}</h2>
     <p><strong>Kontrol:</strong> ${fraksiyonAdi(b.owner)}</p>
+    ${liderSatiri}
     ${ozelEk}
     ${sadakEk}
     ${kesifEk}
@@ -1473,8 +2716,12 @@ export function islemlerCiz(cb) {
   }
 
   if (oyun.seciliId && sonSeciliBolgeId !== oyun.seciliId) {
-    aktifSagSekme = b.owner === "biz" ? "islemler" : "detay";
     sonSeciliBolgeId = oyun.seciliId;
+  }
+  const toplantiAdayi = bolgeById(oyun.toplantiNoktasi?.biz ?? null);
+  const bizToplantiBolge = toplantiAdayi && toplantiAdayi.owner === "biz" ? toplantiAdayi : null;
+  if (!bizToplantiBolge && oyun.toplantiNoktasi?.biz !== null && oyun.toplantiNoktasi?.biz !== undefined) {
+    oyun.toplantiNoktasi.biz = null;
   }
 
   let html = `<h3>${b.ad} – İşlemler</h3>`;
@@ -1491,9 +2738,14 @@ export function islemlerCiz(cb) {
         </div>
         <div class="btn-grid" style="margin-top:8px">
           <button class="buton" id="btn-hareket-emri">Hareket Emri (Gönder → Hedef Seç)</button>
-          <button class="buton grimsi" id="btn-toplanma">Toplanma Noktası Yap</button>
-          <button class="buton" id="btn-toplanmaya-gonder">Toplanmaya Gönder</button>
         </div>
+        <div class="btn-grid" style="margin-top:8px">
+          <button class="buton grimsi" id="btn-toplanti-yap">📍 Toplantı Noktası Yap</button>
+          <button class="buton grimsi" id="btn-toplanti-cagir" ${bizToplantiBolge ? "" : "disabled"}>
+            🚚 Toplantı Noktasına Çağır
+          </button>
+        </div>
+        <p class="ipucu">Aktif toplantı noktası: <strong>${bizToplantiBolge ? bizToplantiBolge.ad : "Yok"}</strong></p>
         <div class="btn-grid" style="margin-top:8px">
           <button class="buton" id="btn-sohret5">Şöhret +5</button>
           <button class="buton" id="btn-sohret10">Şöhret +10</button>
@@ -1503,32 +2755,30 @@ export function islemlerCiz(cb) {
     html += binaPanelHTML(b);
     html += birimSatinAlPanelHTML();
   } else {
-    const komsuVar = oyun.bolgeler.some(
-      (x) => x.owner === 'biz' && komsuMu(x.id, b.id)
-    );
     const tarafsiz = b.owner === 'tarafsiz';
+    const koordineliMumkun = ['ai1', 'ai2', 'ai3'].some((o) => isDostIttifak('biz', o));
     html += `
         <p>Bu bölge bizde değil.</p>
         ${tarafsiz
-        ? `<button class="buton" id="btn-teslim" ${komsuVar ? `` : `disabled`
-        }>Teslim Al (Rüşvet)</button>
+        ? `<button class="buton" id="btn-teslim">Teslim Al (Rüşvet)</button>
              <p class="ipucu">Tarafsızlara saldırı yok. Kendi bölgeni seçip birlik gönderebilirsin; varınca bekler.</p>`
         : `<p class="tehlike">Düşman bölgesi</p>
              <div class="btn-grid">
-               <button class="buton tehlike" id="btn-saldir" ${komsuVar ? `` : `disabled`}>Saldır</button>
-               <button class="buton tehlike" id="btn-saldir-hizli" ${komsuVar ? `` : `disabled`}>Hızlı Saldırı</button>
-               <button class="buton" id="btn-saldiri-emri">Saldırı Emri (Toplanmadan)</button>
+               <button class="buton tehlike" id="btn-saldir">Saldır</button>
+               <button class="buton tehlike" id="btn-saldir-hizli">Hızlı Saldırı</button>
+               <button class="buton" id="btn-saldiri-emri">Saldırı Emri</button>
+               <button class="buton grimsi" id="btn-koordineli-saldiri" ${koordineliMumkun ? `` : `disabled`}>Koordineli Saldırı</button>
              </div>
-	             ${casuslukPanelHTML(b.id)}
-	             <p class="ipucu">Veya kendi bölgeni seç → <strong>Hareket Emri</strong> → bu hedef için haritada “Buraya Gönder”.</p>`
+			             ${casuslukPanelHTML(b.id)}
+			             <p class="ipucu">Veya kendi bölgeni seç → <strong>Hareket Emri</strong> → bu hedef için haritada “Buraya Gönder”.</p>`
       }
       `;
     html += `
       <hr><h4>🚘 Araç Operasyonu</h4>
       <p class="ipucu">Hedef bölgeden motor/araba çal. Başarısızlıkta suçluluk ve polis baskısı yükselir.</p>
       <div class="btn-grid">
-        <button class="buton grimsi" id="btn-cal-motor" ${komsuVar ? "" : "disabled"}>🏍️ Motor Çal</button>
-        <button class="buton grimsi" id="btn-cal-araba" ${komsuVar ? "" : "disabled"}>🚗 Araba Çal</button>
+        <button class="buton grimsi" id="btn-cal-motor">🏍️ Motor Çal</button>
+        <button class="buton grimsi" id="btn-cal-araba">🚗 Araba Çal</button>
       </div>
     `;
   }
@@ -1550,16 +2800,19 @@ export function islemlerCiz(cb) {
     const g2 = document.getElementById("btn-y-guv");
     const g3 = document.getElementById("btn-y-adam");
     const bh = document.getElementById("btn-hareket-emri");
-    const bt = document.getElementById("btn-toplanma");
-    const btg = document.getElementById("btn-toplanmaya-gonder");
+    const bt = document.getElementById("btn-toplanti-yap");
+    const btc = document.getElementById("btn-toplanti-cagir");
     const bs5 = document.getElementById("btn-sohret5");
     const bs10 = document.getElementById("btn-sohret10");
     if (g1) g1.onclick = cb.yatirimGelir;
     if (g2) g2.onclick = cb.yatirimGuv;
     if (g3) g3.onclick = cb.yatirimAdam;
     if (bh) bh.onclick = () => cb.hareketEmriBaslat();
-    if (bt) bt.onclick = cb.toplanmaNoktasiYap;
-    if (btg) btg.onclick = cb.toplanmayaGonder;
+    if (bt && typeof cb.toplantiNoktasiYap === "function") bt.onclick = () => cb.toplantiNoktasiYap();
+    if (btc) {
+      const cagir = cb.toplantiNoktasinaCagir || cb.toplantiNoktasinaGonder;
+      if (typeof cagir === "function") btc.onclick = () => cagir();
+    }
     if (bs5) bs5.onclick = () => cb.sohretSatinAl(5);
     if (bs10) bs10.onclick = () => cb.sohretSatinAl(10);
     document.querySelectorAll(".btn-bina-kur").forEach((btn) => {
@@ -1567,6 +2820,17 @@ export function islemlerCiz(cb) {
     });
     document.querySelectorAll(".btn-bina-yukselt").forEach((btn) => {
       btn.onclick = () => cb.binaYukselt(btn.getAttribute("data-tip"));
+    });
+    document.querySelectorAll(".btn-harac-seviye").forEach((btn) => {
+      btn.onclick = () => {
+        const seviye = btn.getAttribute("data-seviye");
+        if (typeof cb.haracSeviyesiAyarla === "function") cb.haracSeviyesiAyarla(seviye);
+      };
+    });
+    document.querySelectorAll(".btn-alim-sifirla").forEach((btn) => {
+      btn.onclick = () => {
+        if (typeof cb.adamAlimSayacSifirla === "function") cb.adamAlimSayacSifirla();
+      };
     });
   } else {
     if (b.owner === "tarafsiz") {
@@ -1576,9 +2840,11 @@ export function islemlerCiz(cb) {
       const sa = document.getElementById("btn-saldir");
       const sh = document.getElementById("btn-saldir-hizli");
       const se = document.getElementById("btn-saldiri-emri");
+      const sk = document.getElementById("btn-koordineli-saldiri");
       if (sa) sa.onclick = cb.saldiri;
       if (sh) sh.onclick = () => cb.saldiriHizliAcil(b.id);
-      if (se) se.onclick = cb.saldiriEmriVer;
+      if (se) se.onclick = cb.hareketEmriSaldiriBaslat;
+      if (sk) sk.onclick = cb.koordineliSaldiriBaslat;
     }
     const cMotor = document.getElementById("btn-cal-motor");
     const cAraba = document.getElementById("btn-cal-araba");
@@ -1637,28 +2903,58 @@ export function islemlerCiz(cb) {
 
 // === YARDIMCI PANELLER ===
 function birimSatinAlPanelHTML() {
-  const secili = bolgeById(oyun.seciliId);
-  const tasit = secili ? bolgeTasitDurumu(secili) : { motor: 0, araba: 0 };
+  const bizTasit = ownerTasit("biz");
+  const eco = ekonomiDurumuUi();
+  const harac = aktifHaracSeviyesiUi();
+  const limit = bizAlimLimitDurumu();
+  const kisiBasiAlimGideri = alimEkMaliyetiUi(1);
+  const toplamTasitKapasite = ownerToplamKapasite("biz");
+  const tasitKapasiteUstSinir = Math.max(
+    20,
+    Math.round(bizToplamPersonelUi() * 1.1 + oyun.bolgeler.filter((x) => x.owner === "biz").length * 10)
+  );
   let html = `<hr><h4>🪖 Birlik Satın Al</h4>
+    <div style="font-size:11px;color:#9fb3c5;margin-bottom:6px">
+      Alım kotası: ${limit.buTurAlim}/${limit.turKotasi} • Personel tavanı: ${limit.toplamPersonel}/${limit.toplamKapasite}
+      <br>İşe alım gideri: ~${kisiBasiAlimGideri}₺/kişi • Yoğun alım sadakat baskısı üretir
+    </div>
     <div class="btn-grid">`;
   Object.entries(BIRIM_TIPLERI).forEach(([tipKey, t]) => {
     if (!t.satinAlinabilir) return;
     const maliyet = tipKey === "tetikci"
       ? Math.ceil(t.maliyet * (1 - arastirmaEfekt("tetikciMaliyetIndirim")))
       : t.maliyet;
-    const yeterli = oyun.fraksiyon.biz.para >= maliyet;
+    const yeterli = oyun.fraksiyon.biz.para >= (maliyet + kisiBasiAlimGideri) && limit.alinabilir > 0;
     html += `<button class="buton grimsi btn-birim-al" data-tip="${tipKey}"
       ${yeterli ? "" : "disabled"}
-      title="${t.aciklama}">
+      title="${t.aciklama}${limit.alinabilir <= 0 ? " • Alım limiti dolu" : ""}">
       ${t.ikon} ${t.ad} [${maliyet}₺]
     </button>`;
   });
   html += `</div><p class="ipucu" style="font-size:11px">
-    Hiyerarşi: Genç → Tetikçi → Uzman → Ağır Silahlı
+    Hiyerarşi: Genç → Tetikçi → Uzman → Ağır Silahlı • Bu tur kalan alım: ${limit.alinabilir}
+  </p>`;
+  html += `<hr><h4>💸 Haraç Politikası</h4>
+    <div class="btn-grid">`;
+  Object.entries(EKONOMI_DENGE.haracSeviyeleri).forEach(([seviye, bilgi]) => {
+    const aktif = eco.haracSeviye === seviye;
+    html += `<button class="buton grimsi btn-harac-seviye" data-seviye="${seviye}"
+      style="${aktif ? "border:1px solid #f5c542;color:#f5c542;" : ""}"
+      title="Gelir x${bilgi.gelirCarpani.toFixed(2)} • Sadakat ${bilgi.sadakatDelta >= 0 ? "+" : ""}${bilgi.sadakatDelta.toFixed(2)}/tur • Polis ${bilgi.polisDelta >= 0 ? "+" : ""}${bilgi.polisDelta.toFixed(2)}/tur">
+      ${bilgi.ad}
+    </button>`;
+  });
+  html += `<button class="buton grimsi btn-alim-sifirla"
+      title="Bu tur alım sayacını manuel sıfırla">
+      🔁 Alım Sayacı Sıfırla
+    </button>`;
+  html += `</div><p class="ipucu" style="font-size:11px">
+    Aktif: ${harac.ad} • Son haraç geliri: +${Math.round(eco.sonHaracGeliri || haracGeliriTahminBiz())}₺
   </p>`;
   html += `<hr><h4>🚚 Taşıt Lojistiği</h4>
     <div style="font-size:12px;color:#aaa;margin-bottom:6px">
-      Bu bölge stoku: ${tasit.araba} 🚗, ${tasit.motor} 🏍️
+      Filo: ${bizTasit.araba} 🚗, ${bizTasit.motor} 🏍️
+      <br>Toplam kapasite: ${toplamTasitKapasite}/${tasitKapasiteUstSinir}
     </div>
     <div class="btn-grid">`;
   Object.entries(TASIT_TIPLERI).forEach(([tipKey, t]) => {
@@ -1859,9 +3155,11 @@ function esirPanelHTML() {
 export function isimModalGoster() {
   document.getElementById("isim-arka").style.display = "flex";
 }
-export function isimModalBagla(onRandom, onStart) {
+export function isimModalBagla(onRandom, onStart, onMapStart = null) {
   document.getElementById("isim-random").onclick = onRandom;
   document.getElementById("isim-basla").onclick = onStart;
+  const mapBtn = document.getElementById("isim-haritadan");
+  if (mapBtn) mapBtn.onclick = onMapStart;
 }
 
 export function isimModalKapat() {

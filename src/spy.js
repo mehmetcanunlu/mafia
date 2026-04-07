@@ -6,6 +6,7 @@ import { showToast } from "./modal.js";
 import { arastirmaEfekt } from "./research.js";
 import { sesCal } from "./audio.js";
 import { bolgeTasitAyir, bolgeTasitIadeEt, bolgeTasitKombinasyonu } from "./logistics.js";
+import { diplomasiSuikastSonucu } from "./diplomasi.js";
 
 const SUIKAST_MALIYET = 300; // ₺
 const SUIKAST_KAPASITE_GEREK = 4;
@@ -64,7 +65,9 @@ function ekipAyir(owner, bolgeId, adet) {
 
 function ekipIade(owner, bolgeId, parcalar = []) {
   parcalar.forEach((p) => {
-    if ((p?.adet || 0) > 0) yiginaEkle(bolgeId, owner, p.adet, p.tip || "tetikci");
+    if ((p?.adet || 0) > 0) {
+      yiginaEkle(bolgeId, owner, p.adet, p.tip || "tetikci", { tavanUygula: false });
+    }
   });
 }
 
@@ -204,6 +207,7 @@ export function suikastYap(hedefBolgeId) {
 
   if (basarili) {
     hedefFr._liderDevreDisi = oyun.tur + SUIKAST_DEVRE_DISI_TUR;
+    diplomasiSuikastSonucu("biz", hedef.owner, true);
     logYaz(`🗡️ Suikast başarılı! "${liderAd}" ${SUIKAST_DEVRE_DISI_TUR} tur devre dışı.`);
     sesCal("suikast");
     showToast(`🗡️ ${liderAd} devre dışı! (${SUIKAST_DEVRE_DISI_TUR} tur)`, "basari", 5000);
@@ -212,6 +216,7 @@ export function suikastYap(hedefBolgeId) {
   } else {
     // Başarısız: hedef öfkeli, saldırma ihtimali artar
     hedefFr._ofke = (hedefFr._ofke || 0) + 20;
+    diplomasiSuikastSonucu("biz", hedef.owner, false);
     logYaz(`🗡️ Suikast başarısız! ${hedefFr.ad} öfkeli — misilleme yapabilir.`);
     showToast(`🗡️ Suikast başarısız! ${hedefFr.ad} öfkeli.`, "hata", 4000);
     return { basarili: false, mesaj: "Suikast başarısız. Operasyon ekibi ve taşıt kaybedildi." };

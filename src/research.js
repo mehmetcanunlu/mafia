@@ -12,13 +12,13 @@ export const ARASTIRMA_DALLARI = {
     aciklama: "Çete çekirdeği, adam kalitesi ve saha kontrolü.",
     seviyeler: [
       { ad: "Sokak Çekirdeği", gerekPuan: 150, aciklama: "Tetikçi maliyeti bir miktar azalır.", efekt: { tetikciMaliyetIndirim: 0.03 } },
-      { ad: "Silah Hattı", gerekPuan: 400, aciklama: "Garnizon kapasitesi ve ekip verimi artar.", efekt: { tetikciMaliyetIndirim: 0.04, garnizonBonus: 0.05 } },
+      { ad: "Silah Hattı", gerekPuan: 400, aciklama: "Garnizon kapasitesi ve ekip verimi artar.", efekt: { tetikciMaliyetIndirim: 0.04, garnizonBonus: 0.05, personelTavanBonus: 4 } },
       { ad: "Ekip Disiplini", gerekPuan: 850, aciklama: "Saldırı hazırlığı iyileşir.", efekt: { saldiriBonus: 0.04 } },
-      { ad: "Alan Komutanlığı", gerekPuan: 1500, aciklama: "Bölge tutma kapasitesi artar.", efekt: { garnizonBonus: 0.08 } },
+      { ad: "Alan Komutanlığı", gerekPuan: 1500, aciklama: "Bölge tutma kapasitesi artar.", efekt: { garnizonBonus: 0.08, personelTavanBonus: 6 } },
       { ad: "Uzman Talimi", gerekPuan: 2500, aciklama: "Eğitim hattı hızlanır.", efekt: { egitimSureAzaltma: 1 } },
       { ad: "Saldırı Doktrini", gerekPuan: 3800, aciklama: "Saha baskını etkinliği yükselir.", efekt: { saldiriBonus: 0.06 } },
       { ad: "Cephane Standardı", gerekPuan: 5600, aciklama: "Tedarik israfı azalır.", efekt: { tetikciMaliyetIndirim: 0.05 } },
-      { ad: "Kara Operasyon Merkezi", gerekPuan: 8000, aciklama: "Üst seviye örgüt gücü açılır.", efekt: { saldiriBonus: 0.08, garnizonBonus: 0.10 } },
+      { ad: "Kara Operasyon Merkezi", gerekPuan: 8000, aciklama: "Üst seviye örgüt gücü açılır.", efekt: { saldiriBonus: 0.08, garnizonBonus: 0.10, personelTavanBonus: 10 } },
     ],
   },
   taktik: {
@@ -120,6 +120,25 @@ function bosDalDurumu() {
   return { seviye: 0, puan: 0 };
 }
 
+function kategoriEfektToplami(kategori) {
+  const ar = oyun.arastirma || {};
+  let toplam = 0;
+  Object.entries(ARASTIRMA_DALLARI).forEach(([dalId, dalBilgisi]) => {
+    const seviye = Math.max(0, Math.floor(Number(ar?.[dalId]?.seviye) || 0));
+    for (let i = 0; i < seviye; i += 1) {
+      toplam += Number(dalBilgisi?.seviyeler?.[i]?.efekt?.[kategori] || 0);
+    }
+  });
+  return toplam;
+}
+
+function personelTavanBonusunuYansit() {
+  if (!oyun.ekonomi || typeof oyun.ekonomi !== "object") {
+    oyun.ekonomi = { haracSeviye: "orta", alimBuTur: 0, sonHaracGeliri: 0, personelTavanEk: 0 };
+  }
+  oyun.ekonomi.personelTavanEk = Math.max(0, Math.round(kategoriEfektToplami("personelTavanBonus")));
+}
+
 export function arastirmaDurumunuDogrula() {
   if (!oyun.arastirma || typeof oyun.arastirma !== "object") {
     oyun.arastirma = { aktifDal: ARASTIRMA_DAL_IDLERI[0] };
@@ -138,6 +157,7 @@ export function arastirmaDurumunuDogrula() {
     ar[dalId].seviye = Number.isFinite(seviye) ? Math.max(0, Math.min(maxSeviye, Math.floor(seviye))) : 0;
     ar[dalId].puan = Number.isFinite(puan) ? Math.max(0, Math.floor(puan)) : 0;
   });
+  personelTavanBonusunuYansit();
 }
 
 export function arastirmaPuanDetayi(owner = "biz") {

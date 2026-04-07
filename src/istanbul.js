@@ -384,46 +384,46 @@ export const ISTANBUL_ILCELER = istanbulIlceVerisiniHazirla();
 // =============================================
 export const ISTANBUL_KOMSU = {
   // Avrupa
-  fatih:         ["beyoglu", "bayrampasa", "zeytinburnu", "uskudar"],
-  beyoglu:       ["fatih", "besiktas", "sisli", "eyupsultan", "kagithane"],
-  besiktas:      ["beyoglu", "sisli", "sariyer", "uskudar"],
-  sisli:         ["beyoglu", "besiktas", "kagithane", "eyupsultan"],
-  kagithane:     ["beyoglu", "sisli", "sariyer", "eyupsultan"],
-  eyupsultan:    ["beyoglu", "sisli", "kagithane", "bayrampasa", "bagcilar", "basaksehir", "gaziosmanpasa", "sultangazi", "arnavutkoy"],
-  sariyer:       ["besiktas", "kagithane", "beykoz", "sile"],
-  bayrampasa:    ["fatih", "eyupsultan", "zeytinburnu", "bagcilar", "gaziosmanpasa", "esenler", "gungoren"],
-  zeytinburnu:   ["fatih", "bayrampasa", "bakirkoy", "bahcelievler", "gungoren"],
-  bakirkoy:      ["zeytinburnu", "bahcelievler", "avcilar", "kucukcekmece"],
-  bahcelievler:  ["zeytinburnu", "bakirkoy", "bagcilar", "kucukcekmece", "gungoren", "esenler"],
-  bagcilar:      ["eyupsultan", "bayrampasa", "bahcelievler", "kucukcekmece", "basaksehir", "esenyurt", "esenler", "gungoren", "gaziosmanpasa"],
-  kucukcekmece:  ["bahcelievler", "bagcilar", "avcilar", "esenyurt", "bakirkoy"],
-  avcilar:       ["bakirkoy", "kucukcekmece", "esenyurt", "beylikduzu", "buyukcekmece"],
-  esenyurt:      ["bagcilar", "kucukcekmece", "avcilar", "basaksehir", "beylikduzu", "buyukcekmece", "arnavutkoy"],
-  basaksehir:    ["eyupsultan", "bagcilar", "esenyurt", "sultangazi", "arnavutkoy"],
-  arnavutkoy:    ["basaksehir", "esenyurt", "sultangazi", "catalca", "buyukcekmece", "eyupsultan"],
-  beylikduzu:    ["avcilar", "esenyurt", "buyukcekmece"],
-  buyukcekmece:  ["beylikduzu", "esenyurt", "avcilar", "arnavutkoy", "catalca", "silivri"],
-  catalca:       ["arnavutkoy", "buyukcekmece", "silivri"],
-  silivri:       ["buyukcekmece", "catalca"],
-  sultangazi:    ["eyupsultan", "basaksehir", "arnavutkoy", "esenler", "gaziosmanpasa"],
-  esenler:       ["bayrampasa", "bagcilar", "bahcelievler", "gungoren", "gaziosmanpasa", "sultangazi"],
+  fatih: ["beyoglu", "bayrampasa", "zeytinburnu", "uskudar"],
+  beyoglu: ["fatih", "besiktas", "sisli", "eyupsultan", "kagithane"],
+  besiktas: ["beyoglu", "sisli", "sariyer", "uskudar"],
+  sisli: ["beyoglu", "besiktas", "kagithane", "eyupsultan"],
+  kagithane: ["beyoglu", "sisli", "sariyer", "eyupsultan"],
+  eyupsultan: ["beyoglu", "sisli", "kagithane", "bagcilar", "basaksehir", "gaziosmanpasa", "sultangazi", "arnavutkoy"],
+  sariyer: ["besiktas", "kagithane", "beykoz", "sile"],
+  bayrampasa: ["fatih", "zeytinburnu", "bagcilar", "gaziosmanpasa", "esenler", "gungoren"],
+  zeytinburnu: ["fatih", "bayrampasa", "bakirkoy", "gungoren"],
+  bakirkoy: ["zeytinburnu", "bahcelievler", "avcilar", "kucukcekmece"],
+  bahcelievler: ["bakirkoy", "bagcilar", "kucukcekmece", "gungoren"],
+  bagcilar: ["eyupsultan", "bayrampasa", "bahcelievler", "kucukcekmece", "basaksehir", "esenler", "gungoren", "gaziosmanpasa"],
+  kucukcekmece: ["bahcelievler", "bagcilar", "avcilar", "bakirkoy"],
+  avcilar: ["bakirkoy", "kucukcekmece", "esenyurt", "beylikduzu", "buyukcekmece"],
+  esenyurt: ["avcilar", "basaksehir", "beylikduzu", "buyukcekmece", "arnavutkoy"],
+  basaksehir: ["eyupsultan", "bagcilar", "esenyurt", "sultangazi", "arnavutkoy"],
+  arnavutkoy: ["basaksehir", "esenyurt", "sultangazi", "catalca", "buyukcekmece", "eyupsultan"],
+  beylikduzu: ["avcilar", "esenyurt", "buyukcekmece"],
+  buyukcekmece: ["beylikduzu", "esenyurt", "avcilar", "arnavutkoy", "catalca", "silivri"],
+  catalca: ["arnavutkoy", "buyukcekmece", "silivri"],
+  silivri: ["buyukcekmece", "catalca"],
+  sultangazi: ["eyupsultan", "basaksehir", "arnavutkoy", "esenler", "gaziosmanpasa"],
+  esenler: ["bayrampasa", "bagcilar", "gungoren", "gaziosmanpasa", "sultangazi"],
   gaziosmanpasa: ["eyupsultan", "bayrampasa", "bagcilar", "esenler", "gungoren", "sultangazi"],
-  gungoren:      ["zeytinburnu", "bayrampasa", "bahcelievler", "bagcilar", "esenler", "gaziosmanpasa"],
+  gungoren: ["zeytinburnu", "bayrampasa", "bahcelievler", "bagcilar", "esenler", "gaziosmanpasa"],
 
   // Asya
-  uskudar:      ["fatih", "besiktas", "kadikoy", "umraniye", "beykoz"],
-  kadikoy:      ["uskudar", "atasehir", "maltepe"],
-  atasehir:     ["kadikoy", "umraniye", "maltepe", "sancaktepe"],
-  umraniye:     ["uskudar", "atasehir", "beykoz", "cekmekoy", "sancaktepe", "sultanbeyli"],
-  beykoz:       ["sariyer", "uskudar", "umraniye", "cekmekoy", "sile"],
-  cekmekoy:     ["umraniye", "beykoz", "sancaktepe", "sultanbeyli", "sile"],
-  sile:         ["sariyer", "beykoz", "cekmekoy"],
-  maltepe:      ["kadikoy", "atasehir", "kartal", "sancaktepe"],
-  kartal:       ["maltepe", "sancaktepe", "pendik", "sultanbeyli"],
-  pendik:       ["kartal", "tuzla", "sancaktepe", "sultanbeyli"],
-  tuzla:        ["pendik", "sultanbeyli"],
-  sultanbeyli:  ["umraniye", "cekmekoy", "sancaktepe", "kartal", "pendik", "tuzla"],
-  sancaktepe:   ["atasehir", "umraniye", "cekmekoy", "kartal", "pendik", "sultanbeyli", "maltepe"],
+  uskudar: ["fatih", "besiktas", "kadikoy", "umraniye", "beykoz"],
+  kadikoy: ["uskudar", "atasehir", "maltepe"],
+  atasehir: ["kadikoy", "umraniye", "maltepe", "sancaktepe"],
+  umraniye: ["uskudar", "atasehir", "beykoz", "cekmekoy", "sancaktepe", "sultanbeyli"],
+  beykoz: ["sariyer", "uskudar", "umraniye", "cekmekoy", "sile"],
+  cekmekoy: ["umraniye", "beykoz", "sancaktepe", "sultanbeyli", "sile"],
+  sile: ["sariyer", "beykoz", "cekmekoy"],
+  maltepe: ["kadikoy", "atasehir", "kartal", "sancaktepe"],
+  kartal: ["maltepe", "sancaktepe", "pendik", "sultanbeyli"],
+  pendik: ["kartal", "tuzla", "sancaktepe", "sultanbeyli"],
+  tuzla: ["pendik"],
+  sultanbeyli: ["umraniye", "cekmekoy", "sancaktepe", "kartal", "pendik", "tuzla"],
+  sancaktepe: ["atasehir", "umraniye", "cekmekoy", "kartal", "pendik", "sultanbeyli", "maltepe"],
 };
 
 // =============================================
@@ -460,24 +460,24 @@ export const BASLANGIC_KONUMLARI = {
   }
 };
 
-const BASLANGIC_TASIT = Object.freeze({
-  biz: { araba: 2, motor: 4 },
-  ai1: { araba: 1, motor: 3 },
-  ai2: { araba: 1, motor: 3 },
-  ai3: { araba: 1, motor: 3 },
-  tarafsiz: { araba: 0, motor: 0 },
-});
 
 // Başlangıç bölgeleri oluştur
-export function istanbulBolgelerOlustur(boyut, zorluk) {
+export function istanbulBolgelerOlustur(boyut, zorluk, secenekler = null) {
   const ZORLUK_MAP = {
     kolay: { aiGuvBonus: 0 },
-    orta:  { aiGuvBonus: 0 },
-    zor:   { aiGuvBonus: 1 },
+    orta: { aiGuvBonus: 0 },
+    zor: { aiGuvBonus: 1 },
   };
   const z = ZORLUK_MAP[zorluk] || ZORLUK_MAP.orta;
 
-  const konum = boyut === "buyuk" ? BASLANGIC_KONUMLARI.buyuk : BASLANGIC_KONUMLARI.kucuk;
+  const varsayilanKonum = boyut === "buyuk" ? BASLANGIC_KONUMLARI.buyuk : BASLANGIC_KONUMLARI.kucuk;
+  const override = (secenekler && typeof secenekler === "object" && secenekler.baslangicKonumlari)
+    ? secenekler.baslangicKonumlari
+    : null;
+  const konum = {
+    ...varsayilanKonum,
+    ...(override && typeof override === "object" ? override : {}),
+  };
   const ilceIds = konum.bolgeler.length > 0 ? konum.bolgeler : Object.keys(ISTANBUL_ILCELER);
 
   const bolgeler = [];
@@ -496,30 +496,35 @@ export function istanbulBolgelerOlustur(boyut, zorluk) {
       garnizon: Math.max(3, Math.round(ilce.nufus / 25)),
       yGel: 0, yGuv: 0, yAdam: 0,
       ozellik: ilce.ozellik,
-      tasit: { ...BASLANGIC_TASIT.tarafsiz },
     });
   }
 
   // Başlangıç sahiplikleri ata
+  const tercihSira = Object.freeze(["biz", "ai1", "ai2", "ai3"]);
+  const fallbackAdaylar = Object.freeze({
+    biz: ["fatih", "besiktas", "uskudar", "kadikoy", "sisli"],
+    ai1: ["esenyurt", "buyukcekmece", "basaksehir", "arnavutkoy"],
+    ai2: ["tuzla", "pendik", "kartal", "sultanbeyli"],
+    ai3: ["beykoz", "sariyer", "cekmekoy", "sancaktepe"],
+  });
+
   const ata = (bolgeId, owner) => {
-    // İlçe listede yoksa en yakın mevcut ilçeyi bul
-    let b = bolgeler.find(x => x.id === bolgeId);
+    let b = bolgeler.find((x) => x.id === bolgeId && x.owner === "tarafsiz");
     if (!b) {
-      // Fallback: listedeki ilk tarafsız ilçeyi al
-      b = bolgeler.find(x => x.owner === "tarafsiz");
+      const adaylar = fallbackAdaylar[owner] || [];
+      b = adaylar
+        .map((id) => bolgeler.find((x) => x.id === id && x.owner === "tarafsiz"))
+        .find(Boolean);
     }
+    if (!b) b = bolgeler.find((x) => x.owner === "tarafsiz");
     if (b) {
       b.owner = owner;
       b.garnizon = owner === "biz" ? 4 : Math.max(8, Math.round(b.nufus / 20));
       b.baslangicBirimTipi = "tetikci";
-      b.tasit = { ...(BASLANGIC_TASIT[owner] || BASLANGIC_TASIT.tarafsiz) };
     }
   };
 
-  ata(konum.biz, "biz");
-  ata(konum.ai1, "ai1");
-  ata(konum.ai2, "ai2");
-  ata(konum.ai3, "ai3");
+  tercihSira.forEach((owner) => ata(konum[owner], owner));
 
   return bolgeler;
 }
