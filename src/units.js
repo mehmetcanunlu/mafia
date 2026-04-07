@@ -69,15 +69,15 @@ export const TASIT_TIPLERI = {
   motor: {
     ad: "Motor",
     ikon: "🏍️",
-    maliyet: 120,
-    bakim: 0.08,
+    maliyet: 110,
+    bakim: 0.06,
     kapasite: 2,
   },
   araba: {
     ad: "Araba",
     ikon: "🚗",
-    maliyet: 220,
-    bakim: 0.14,
+    maliyet: 240,
+    bakim: 0.17,
     kapasite: 4,
   },
 };
@@ -249,19 +249,36 @@ export function birimBakimGideri(birim) {
 }
 
 export function ownerBakimToplami(owner) {
-  const garnizonGideri = oyun.bolgeler
-    .filter((b) => b.owner === owner)
-    .reduce((toplam, b) => toplam + ((b.garnizon || 0) * (BIRIM_TIPLERI.tetikci.bakim || 0.1)), 0);
-  const birimGideri = oyun.birimler
-    .filter((b) => b.owner === owner)
-    .reduce((toplam, b) => toplam + birimBakimGideri(b), 0);
-  const tasitGideri = oyun.bolgeler
-    .filter((b) => b.owner === owner)
-    .reduce((toplam, b) => {
-      const tasit = b.tasit || { motor: 0, araba: 0 };
-      return toplam +
-        (tasit.motor || 0) * TASIT_TIPLERI.motor.bakim +
-        (tasit.araba || 0) * TASIT_TIPLERI.araba.bakim;
-    }, 0);
-  return garnizonGideri + birimGideri + tasitGideri;
+  const ownerBolgeler = oyun.bolgeler.filter((b) => b.owner === owner);
+  const ownerBirimler = oyun.birimler.filter((b) => b.owner === owner);
+  const birimAdet = ownerBirimler.reduce((toplam, b) => toplam + (b.adet || 0), 0);
+  const birimGideriTemel = ownerBirimler.reduce((toplam, b) => toplam + birimBakimGideri(b), 0);
+  const personelToplami = birimAdet;
+
+  // Geç oyunda maaş yükü doğrusal değil; ölçek büyüdükçe birim başı maliyet bir miktar düşer.
+  const personelEsik = 90 + ownerBolgeler.length * 10;
+  const asim = Math.max(0, personelToplami - personelEsik);
+  const maasCarpani = Math.max(0.72, 1 - asim * 0.0012);
+
+  const birimGideri = birimGideriTemel * maasCarpani;
+
+  const tasitToplam = ownerBolgeler.reduce((toplam, b) => {
+    const tasit = b.tasit || { motor: 0, araba: 0 };
+    toplam.motor += tasit.motor || 0;
+    toplam.araba += tasit.araba || 0;
+    return toplam;
+  }, { motor: 0, araba: 0 });
+  const tasitGideri =
+    tasitToplam.motor * TASIT_TIPLERI.motor.bakim +
+    tasitToplam.araba * TASIT_TIPLERI.araba.bakim;
+
+  // Araç/personel dengesizliğini frenle: kapasite çok şişerse ek filo maliyeti doğar.
+  const tasitKapasite =
+    tasitToplam.motor * TASIT_TIPLERI.motor.kapasite +
+    tasitToplam.araba * TASIT_TIPLERI.araba.kapasite;
+  const hedefKapasite = Math.round(personelToplami * 0.65 + ownerBolgeler.length * 4);
+  const fazlaKapasite = Math.max(0, tasitKapasite - hedefKapasite);
+  const dengesizlikGideri = fazlaKapasite * 0.025;
+
+  return birimGideri + tasitGideri + dengesizlikGideri;
 }

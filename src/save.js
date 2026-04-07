@@ -1,10 +1,67 @@
 // save.js — 3 Slotlu LocalStorage Kayıt/Yükleme Sistemi
 
-import { oyun, hazirlaBolgeDurumu, hazirlaBirimDurumu, bolgeMapTemizle } from "./state.js";
+import {
+  oyun,
+  hazirlaBolgeDurumu,
+  hazirlaBirimDurumu,
+  bolgeMapTemizle,
+  diplomasiDurumuTamamla,
+  ekonomiDurumuTamamla,
+} from "./state.js";
 import { istatistik } from "./stats.js";
 
-const VERIYON = 6;
+const VERIYON = 8;
 const SLOT_ANAHTARI = (slot) => `mafya-kayit-slot-${slot}`;
+
+function birimSayacHesapla(yuklenenOyun) {
+  let sayac = Math.max(1, Math.floor(Number(yuklenenOyun?.birimSayac) || 1));
+  (yuklenenOyun?.birimler || []).forEach((birim) => {
+    const eslesme = /^k(\d+)$/.exec(String(birim?.id || ""));
+    if (eslesme) sayac = Math.max(sayac, Number(eslesme[1]));
+  });
+  return sayac;
+}
+
+function legacyGarnizonlariBirimlereTasi(yuklenenOyun) {
+  if (!Array.isArray(yuklenenOyun?.bolgeler)) return;
+  if (!Array.isArray(yuklenenOyun.birimler)) yuklenenOyun.birimler = [];
+  let sayac = birimSayacHesapla(yuklenenOyun);
+
+  yuklenenOyun.bolgeler.forEach((bolge) => {
+    const legacy = Math.max(0, Math.floor(Number(bolge?.garnizon) || 0));
+    if (legacy > 0 && bolge.owner && bolge.owner !== "tarafsiz") {
+      const tip = bolge.baslangicBirimTipi || "tetikci";
+      const mevcut = yuklenenOyun.birimler.find(
+        (birim) =>
+          birim.owner === bolge.owner &&
+          birim.konumId === bolge.id &&
+          (birim.tip || "tetikci") === tip &&
+          !birim._sil &&
+          !birim.hedefId &&
+          (!birim.rota || birim.rota.length === 0)
+      );
+      if (mevcut) {
+        mevcut.adet = Math.max(0, Math.floor(Number(mevcut.adet) || 0)) + legacy;
+      } else {
+        yuklenenOyun.birimler.push({
+          id: `k${++sayac}`,
+          owner: bolge.owner,
+          adet: legacy,
+          tip,
+          konumId: bolge.id,
+          hedefId: null,
+          rota: [],
+          durum: "bekle",
+          gecisHakki: false,
+          operasyonId: null,
+          bekliyor: false,
+        });
+      }
+    }
+    if (bolge && Object.prototype.hasOwnProperty.call(bolge, "garnizon")) delete bolge.garnizon;
+  });
+  yuklenenOyun.birimSayac = Math.max(sayac, Math.floor(Number(yuklenenOyun.birimSayac) || 1));
+}
 
 function oyunDurumuNormallestir(yuklenenOyun) {
   if (!yuklenenOyun || typeof yuklenenOyun !== "object") return yuklenenOyun;
@@ -17,9 +74,32 @@ function oyunDurumuNormallestir(yuklenenOyun) {
   if (!Array.isArray(yuklenenOyun.esirler)) yuklenenOyun.esirler = [];
   if (!yuklenenOyun.olaylar) yuklenenOyun.olaylar = { sonrakiTur: 10, gecmis: [] };
   if (!yuklenenOyun.istatistikler) yuklenenOyun.istatistikler = { kazanilanSavaslar: 0, fetihler: 0 };
-  if (!yuklenenOyun.toplanma) yuklenenOyun.toplanma = { biz: null, ai1: null, ai2: null };
+  if (!yuklenenOyun.ekonomiKpi) yuklenenOyun.ekonomiKpi = { hedefTurlar: [20, 40, 60], kayitlar: [] };
+  if (!Array.isArray(yuklenenOyun.operasyonlar)) yuklenenOyun.operasyonlar = [];
   if (!Array.isArray(yuklenenOyun.birimler)) yuklenenOyun.birimler = [];
   yuklenenOyun.birimler = yuklenenOyun.birimler.map((birim) => hazirlaBirimDurumu(birim));
+  legacyGarnizonlariBirimlereTasi(yuklenenOyun);
+  yuklenenOyun.operasyonlar = yuklenenOyun.operasyonlar
+    .filter((op) => op && typeof op === "object")
+    .map((op) => ({
+      id: op.id || `op-${Math.random().toString(36).slice(2, 8)}`,
+      tip: op.tip || "koordineli_saldiri",
+      hedefId: (typeof op.hedefId === "string" || Number.isFinite(op.hedefId)) ? op.hedefId : null,
+      baslatanOwner: op.baslatanOwner || "biz",
+      katilimcilar: Array.isArray(op.katilimcilar)
+        ? op.katilimcilar
+          .filter((kat) => kat && typeof kat === "object")
+          .map((kat) => ({
+            owner: kat.owner || "biz",
+            hazir: !!kat.hazir,
+            konvoyIdler: Array.isArray(kat.konvoyIdler) ? kat.konvoyIdler.filter(Boolean) : [],
+          }))
+        : [],
+      durum: op.durum || "hazirlik",
+      yaratildisTur: Number.isFinite(op.yaratildisTur) ? op.yaratildisTur : (Number(yuklenenOyun.tur) || 0),
+      zaman_asimi: Number.isFinite(op.zaman_asimi) ? op.zaman_asimi : 8,
+    }))
+    .filter((op) => op.hedefId !== null);
   if (!yuklenenOyun.arastirma) {
     yuklenenOyun.arastirma = {
       aktifDal: "org",
@@ -36,6 +116,36 @@ function oyunDurumuNormallestir(yuklenenOyun) {
   if (!Number.isFinite(yuklenenOyun.asayis.sonBaskinTur)) yuklenenOyun.asayis.sonBaskinTur = -999;
   if (!yuklenenOyun.sohret) yuklenenOyun.sohret = { biz: 0, ai1: 0, ai2: 0, ai3: 0 };
   if (!yuklenenOyun.fraksiyon) yuklenenOyun.fraksiyon = {};
+  // Fraksiyon araç havuzu normalizasyonu (eski kayıt uyumluluğu)
+  ["biz", "ai1", "ai2", "ai3"].forEach((owner) => {
+    const fr = yuklenenOyun.fraksiyon[owner];
+    if (!fr) return;
+    if (!fr.tasit || typeof fr.tasit !== "object") fr.tasit = { araba: 4, motor: 6 };
+    fr.tasit.araba = Math.max(0, Math.floor(Number(fr.tasit.araba) || 0));
+    fr.tasit.motor = Math.max(0, Math.floor(Number(fr.tasit.motor) || 0));
+  });
+  const eskiToplanma = (yuklenenOyun.toplanma && typeof yuklenenOyun.toplanma === "object")
+    ? yuklenenOyun.toplanma
+    : {};
+  if (!yuklenenOyun.toplantiNoktasi || typeof yuklenenOyun.toplantiNoktasi !== "object") {
+    yuklenenOyun.toplantiNoktasi = {
+      biz: eskiToplanma.biz ?? null,
+      ai1: eskiToplanma.ai1 ?? null,
+      ai2: eskiToplanma.ai2 ?? null,
+      ai3: eskiToplanma.ai3 ?? null,
+    };
+  }
+  const aktifBolgeIdleri = new Set((yuklenenOyun.bolgeler || []).map((b) => String(b?.id)));
+  ["biz", "ai1", "ai2", "ai3"].forEach((owner) => {
+    const secili = yuklenenOyun.toplantiNoktasi?.[owner];
+    yuklenenOyun.toplantiNoktasi[owner] =
+      secili !== null && secili !== undefined && aktifBolgeIdleri.has(String(secili))
+        ? secili
+        : null;
+  });
+  if (Object.prototype.hasOwnProperty.call(yuklenenOyun, "toplanma")) delete yuklenenOyun.toplanma;
+  yuklenenOyun.ekonomi = ekonomiDurumuTamamla(yuklenenOyun.ekonomi);
+  yuklenenOyun.diplomasi = diplomasiDurumuTamamla(yuklenenOyun.diplomasi, yuklenenOyun.fraksiyon);
 
   return yuklenenOyun;
 }
