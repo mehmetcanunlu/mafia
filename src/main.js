@@ -32,6 +32,11 @@ import { sadakatTick, fetihSonrasiSadakat } from "./loyalty.js";
 import { arastirmaTick, arastirmaEfekt } from "./research.js";
 import { liderDevreDisiMi } from "./spy.js";
 import { bolgeTasitIadeEt } from "./logistics.js";
+import { tutorialArayuzKur, tutorialBaslat } from "../scripts/tutorial/tutorial.js";
+
+document.addEventListener("ui:guncel", () => {
+  ensureGameControls();
+});
 
 /* --- YENİ: saldırı çözümü (toplu varan birlikler) --- */
 export function garnizonTemizleVeYiginaTasi() {
@@ -547,6 +552,7 @@ function turIsle() {
 // === OYUN İÇİ KONTROL BUTONLARI (ses + kaydet) ===
 function ensureGameControls() {
   if (document.getElementById("oyun-kontrol-bar")) return;
+  tutorialArayuzKur();
   const bar = document.createElement("div");
   bar.id = "oyun-kontrol-bar";
   bar.style.cssText = "display:inline-flex;gap:4px;align-items:center;";
@@ -725,6 +731,7 @@ function isimAkisi() {
     ensureGameControls();
     oyun.duraklat = false;
     durumCiz();
+    setTimeout(() => tutorialBaslat(), 120);
   });
 
   isimModalBagla(
@@ -760,6 +767,7 @@ function isimAkisi() {
       oyun.duraklat = false;
       durumCiz();
       hareketTick();
+      setTimeout(() => tutorialBaslat(), 120);
     }
   );
 }

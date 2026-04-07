@@ -789,7 +789,7 @@ function arastirmaSayfaIcerikHTML() {
     if (arastirmaSayfaFiltre !== "tum" && arastirmaSayfaFiltre !== dalId) return;
     const durum = ar[dalId] || { seviye: 0, puan: 0 };
     const aktif = dalId === aktifDalId;
-    html += `<section class="arastirma-matris-dal ${aktif ? "aktif" : ""}">
+    html += `<section class="arastirma-matris-dal ${aktif ? "aktif" : ""}" data-dal="${dalId}">
       <div class="arastirma-matris-sol">
         <div class="arastirma-dal-ad">${dal.ikon} ${dal.ad}</div>
         <div class="arastirma-dal-acik">${dal.aciklama}</div>
@@ -935,6 +935,7 @@ export function durumCiz() {
   &nbsp; | &nbsp; <span class="etiket" title="${netGelir.detay.replace(/"/g, "&quot;")}">Net:</span> <span title="${netGelir.detay.replace(/"/g, "&quot;")}">${netGelir.net}</span>
   &nbsp; | &nbsp; <button class="buton grimsi" id="pause-btn">${oyun.duraklat ? "Devam Et" : "Duraklat"
     }</button>
+  &nbsp; <button class="buton grimsi" id="tutorial-btn">📘 Tutorial</button>
   &nbsp; <button class="buton grimsi" id="arastirma-sayfa-btn">Araştırma</button>
   &nbsp; <button class="buton" id="ayarlar-btn">Ayarlar</button>
 `;
@@ -1327,6 +1328,12 @@ export function uiGuncel(cb) {
   // Pause bağla
   const pauseBtn = document.getElementById("pause-btn");
   if (pauseBtn) pauseBtn.onclick = cb.duraklatDevam;
+  const tutorialBtn = document.getElementById("tutorial-btn");
+  if (tutorialBtn) {
+    tutorialBtn.onclick = () => {
+      document.dispatchEvent(new CustomEvent("tutorial:open"));
+    };
+  }
 
   // Ayarlar modalı hazırla + bağla
   ensureAyarModal();
@@ -1354,6 +1361,7 @@ export function uiGuncel(cb) {
   }
 
   if (arastirmaSayfaAcik) arastirmaSayfaGuncel();
+  document.dispatchEvent(new CustomEvent("ui:guncel"));
 }
 
 export function detayCiz() {
