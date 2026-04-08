@@ -88,9 +88,8 @@ const HARITA_MODLARI = Object.freeze({
   siyasi: { ad: "Siyasi", tus: "1" },
   askeri: { ad: "Askeri", tus: "2" },
   ekonomik: { ad: "Ekonomik", tus: "3" },
-  lojistik: { ad: "Lojistik", tus: "4" },
 });
-const HARITA_MOD_SIRASI = Object.freeze(["siyasi", "askeri", "ekonomik", "lojistik"]);
+const HARITA_MOD_SIRASI = Object.freeze(["siyasi", "askeri", "ekonomik"]);
 let aktifHaritaModu = "siyasi";
 let haritaKisayolBagli = false;
 let duraklatKisayolBagli = false;
@@ -892,20 +891,12 @@ function bolgeEtiketIstihbaratMetni(bolge, seviye = "normal", mod = aktifHaritaM
   const birlikToplam = bolgeBirlikToplami(bolge.id, bolge.owner, true);
   const gidenToplam = bolgeGidenKonvoyToplami(bolge.id, bolge.owner);
   const gelir = bolgeGeliriHesapla(bolge);
-  const tasit = ownerTasit(bolge.owner);
-  const araba = tasit.araba || 0;
-  const motor = tasit.motor || 0;
   if (mod === "askeri") {
     if (seviye === "dar") return gidenToplam > 0 ? `A${birlikToplam}→${gidenToplam}` : `A${birlikToplam}`;
     return gidenToplam > 0 ? `⚔${birlikToplam} ▶${gidenToplam}` : `⚔${birlikToplam}`;
   }
   if (mod === "ekonomik") {
     return seviye === "dar" ? `+${gelir}` : `+${gelir}₺`;
-  }
-  if (mod === "lojistik") {
-    if (seviye === "dar") return `L${araba}/${motor}`;
-    if (seviye === "kisa") return `🚗${araba}/${motor}`;
-    return `🚗${araba} 🏍️${motor}`;
   }
   return "";
 }
@@ -914,14 +905,11 @@ function bolgeTooltipMetni(bolge) {
   if (dusmanIstihbaratiGizliMi(bolge)) {
     if (aktifHaritaModu === "askeri") return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - Askeri istihbarat: ?`;
     if (aktifHaritaModu === "ekonomik") return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - Ekonomi istihbaratı: ?`;
-    if (aktifHaritaModu === "lojistik") return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - Lojistik istihbarat: ?`;
     return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - İstihbarat: ?`;
   }
 
   const birlikToplam = bolgeBirlikToplami(bolge.id, bolge.owner, true);
   const savunmaPuani = (bolge.guv || 0) + (bolge.yGuv || 0);
-  const tasit = ownerTasit(bolge.owner);
-  const kapasite = (tasit.araba || 0) * 4 + (tasit.motor || 0) * 2;
 
   if (aktifHaritaModu === "askeri") {
     return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - Birlik: ${birlikToplam} | Savunma: ${savunmaPuani}`;
@@ -929,9 +917,6 @@ function bolgeTooltipMetni(bolge) {
   if (aktifHaritaModu === "ekonomik") {
     const gelir = bolgeGeliriHesapla(bolge);
     return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - Gelir: ${gelir}₺ | Adam x${(1 + (bolge.yAdam || 0) * 0.7).toFixed(1)}`;
-  }
-  if (aktifHaritaModu === "lojistik") {
-    return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - 🚗 ${tasit.araba || 0} | 🏍️ ${tasit.motor || 0} | Kapasite: ${kapasite}`;
   }
   return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - Garnizon: ${bolgeHazirBirimSayisi(bolge.id, bolge.owner)}`;
 }
@@ -945,10 +930,6 @@ function bolgeMetrikDegeri(bolge, mod) {
   }
   if (mod === "ekonomik") {
     return (bolge.gelir || 0) * (1 + (bolge.yGel || 0) * 0.5);
-  }
-  if (mod === "lojistik") {
-    const t = ownerTasit(bolge.owner);
-    return (t.araba || 0) * 4 + (t.motor || 0) * 2;
   }
   return 0;
 }
@@ -982,7 +963,6 @@ function bolgeRenkHesapla(bolge, mod, min, max) {
 function haritaModLegendMetni(mod) {
   if (mod === "askeri") return "Düşük birlik  •  Yüksek birlik";
   if (mod === "ekonomik") return "Düşük gelir  •  Yüksek gelir";
-  if (mod === "lojistik") return "Düşük taşıt  •  Yüksek taşıt";
   return "Sahiplik renkleri";
 }
 
@@ -1023,9 +1003,7 @@ function haritaModEfsaneGuncelle() {
       ? "linear-gradient(90deg, hsl(8 72% 84%), hsl(8 72% 36%))"
       : aktifHaritaModu === "ekonomik"
         ? "linear-gradient(90deg, hsl(38 78% 85%), hsl(38 78% 42%))"
-        : aktifHaritaModu === "lojistik"
-          ? "linear-gradient(90deg, hsl(215 18% 38%), hsl(196 76% 40%))"
-          : "linear-gradient(90deg, #1e8449, #922b21, #6c2bb8, #b7950b)";
+        : "linear-gradient(90deg, #1e8449, #922b21, #6c2bb8, #b7950b)";
   kutu.innerHTML = `
     <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
       <strong>Harita Modu: ${mod.ad}</strong>
@@ -1057,8 +1035,9 @@ function haritaModKisayolBagla() {
     if (e.defaultPrevented) return;
     const tag = (document.activeElement?.tagName || "").toLowerCase();
     if (tag === "input" || tag === "textarea" || tag === "select") return;
-    if (!["1", "2", "3", "4"].includes(e.key)) return;
+    if (!/^[1-9]$/.test(e.key)) return;
     const idx = Number(e.key) - 1;
+    if (idx < 0 || idx >= HARITA_MOD_SIRASI.length) return;
     haritaModSec(HARITA_MOD_SIRASI[idx]);
   });
 }
@@ -2055,10 +2034,21 @@ export function durumCiz() {
   const ilAi1 = iliskiDurumu("biz", "ai1");
   const ilAi2 = iliskiDurumu("biz", "ai2");
   const ilAi3 = iliskiDurumu("biz", "ai3");
+  const bizLojistikKapasite = ownerToplamKapasite("biz");
+  const bizLojistikKullanim = oyun.birimler
+    .filter((k) => k.owner === "biz" && !k._sil && ((k.tasitAraba || 0) > 0 || (k.tasitMotor || 0) > 0))
+    .reduce((toplam, k) => toplam + ((k.tasitAraba || 0) * 4) + ((k.tasitMotor || 0) * 2), 0);
+  const bizLojistikKalan = Math.max(0, bizLojistikKapasite - bizLojistikKullanim);
+  const bizTasit = ownerTasit("biz");
+  const lojistikBaslik = `Filo: 🚗 ${bizTasit.araba || 0} • 🏍️ ${bizTasit.motor || 0} • Kalan kapasite: ${bizLojistikKalan}`;
+  const lojistikKullanimMetni = bizLojistikKullanim > 0
+    ? ` <span style="color:#f7b267">(-${bizLojistikKullanim})</span>`
+    : "";
   sol.innerHTML = `
     <span class="etiket">Çetemiz:</span> <span id="biz-adi">${biz.ad}</span>
     &nbsp; | &nbsp; <span class="etiket">Lider:</span> ${lider ? liderProfilAdSatiriHTML(lider, 20) : '—'}
     &nbsp; | &nbsp; <span class="etiket">Para:</span> ${Math.floor(biz.para)} ₺
+    &nbsp; | &nbsp; <span class="etiket" title="${lojistikBaslik}">Lojistik:</span> ${bizLojistikKapasite}${lojistikKullanimMetni}
     ${yaraliToplam > 0 ? `&nbsp; | &nbsp; <span style="color:#f39c12">🩹 ${yaraliToplam}</span>` : ''}
     ${esirToplam > 0 ? `&nbsp; | &nbsp; <span style="color:#e74c3c">⛓️ ${esirToplam}</span>` : ''}
   `;

@@ -16,7 +16,7 @@ export function tutorialAdimConfigOlustur(arastirmaDallari) {
     {
       baslik: "Harita modları",
       icerik:
-        "Üstteki harita modu düğmeleri (1-4) ile siyasi, askeri, ekonomik ve lojistik görünümü değiştirirsin.",
+        "Üstteki harita modu düğmeleri (1-3) ile siyasi, askeri ve ekonomik görünümü değiştirirsin.",
       hedefSecici: "#harita-mod-kontrol-ust",
       hedefSeciciler: ["#harita-mod-kontrol-ust", ".harita-mod-btn"],
     },
