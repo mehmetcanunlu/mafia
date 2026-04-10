@@ -8,6 +8,7 @@ import { krizCarpani } from "./events.js";
 import { BIRIM_TIPLERI, TASIT_TIPLERI, ownerBakimToplami } from "./units.js";
 import { ARASTIRMA_DALLARI } from "./research.js";
 import { konvoyBaslaAnimasyonu } from "./animations.js";
+import { gucPuani } from "./gucDengesi.js";
 import {
   ownerTasit,
   ownerTasitAyir,
@@ -21,6 +22,8 @@ import {
   savasIliskiModifiyeri,
   diplomasiSuikastSonucu,
   iliskiDegistir,
+  iliskiDegeri,
+  savastaMi,
   isDostIttifak,
 } from "./diplomasi.js";
 
@@ -42,15 +45,17 @@ function binaBonus(b, tip) {
 }
 
 function aiArastirmaDurumu(fr) {
-  if (!fr._arastirma) {
-    fr._arastirma = {
-      aktifDal: "org",
-      org: { seviye: 0, puan: 0 },
-      ekonomi: { seviye: 0, puan: 0 },
-      istihbarat: { seviye: 0, puan: 0 },
-    };
-  }
-  return fr._arastirma;
+  const dalIdleri = Object.keys(ARASTIRMA_DALLARI);
+  if (!fr._arastirma || typeof fr._arastirma !== "object") fr._arastirma = {};
+  const ar = fr._arastirma;
+  if (!ARASTIRMA_DALLARI[ar.aktifDal]) ar.aktifDal = dalIdleri[0];
+  dalIdleri.forEach((dalId) => {
+    const maxSeviye = ARASTIRMA_DALLARI[dalId]?.seviyeler?.length || 0;
+    if (!ar[dalId] || typeof ar[dalId] !== "object") ar[dalId] = { seviye: 0, puan: 0 };
+    ar[dalId].seviye = Math.max(0, Math.min(maxSeviye, Math.floor(Number(ar[dalId].seviye) || 0)));
+    ar[dalId].puan = Math.max(0, Math.floor(Number(ar[dalId].puan) || 0));
+  });
+  return ar;
 }
 
 function aiArastirmaEfekt(id, kategori) {
@@ -68,6 +73,53 @@ function aiArastirmaEfekt(id, kategori) {
   return toplam;
 }
 
+function aiArastirmaOncelikSirasi(id) {
+  const para = Number(oyun.fraksiyon?.[id]?.para || 0);
+  const sahip = oyun.bolgeler.filter((b) => b.owner === id);
+  const ortSadakat = sahip.length
+    ? sahip.reduce((t, b) => t + (Number(b.sadakat) || 55), 0) / sahip.length
+    : 55;
+  const asker = oyun.birimler
+    .filter((u) => u.owner === id && !u._sil)
+    .reduce((t, u) => t + (u.adet || 0), 0);
+  const tasit = ownerTasit(id);
+  const tasitKapasite = (tasit.araba || 0) * (TASIT_TIPLERI.araba?.kapasite || 4) +
+    (tasit.motor || 0) * (TASIT_TIPLERI.motor?.kapasite || 2);
+
+  const oncelik = [];
+  if (para < 260) oncelik.push("ekonomi", "finans");
+  if (tasitKapasite < asker * 0.55) oncelik.push("lojistik");
+  if (ortSadakat < 45) oncelik.push("propaganda");
+  if (asker < Math.max(20, sahip.length * 12)) oncelik.push("org");
+  oncelik.push("taktik", "istihbarat", "org", "ekonomi", "lojistik", "finans", "propaganda");
+
+  const dalIdleri = Object.keys(ARASTIRMA_DALLARI);
+  return [...new Set(oncelik)].filter((dalId) => dalIdleri.includes(dalId));
+}
+
+function aiSonrakiArastirmaDali(id, ar) {
+  const dalIdleri = Object.keys(ARASTIRMA_DALLARI);
+  const aktifler = dalIdleri.filter((dalId) => {
+    const max = ARASTIRMA_DALLARI[dalId]?.seviyeler?.length || 0;
+    return (ar?.[dalId]?.seviye || 0) < max;
+  });
+  if (!aktifler.length) return dalIdleri[0];
+
+  const oncelik = aiArastirmaOncelikSirasi(id);
+  const oncelikIndex = new Map(oncelik.map((dalId, i) => [dalId, i]));
+  return aktifler.sort((a, b) => {
+    const seviyeA = ar?.[a]?.seviye || 0;
+    const seviyeB = ar?.[b]?.seviye || 0;
+    if (seviyeA !== seviyeB) return seviyeA - seviyeB;
+    const oncelikA = oncelikIndex.has(a) ? oncelikIndex.get(a) : 999;
+    const oncelikB = oncelikIndex.has(b) ? oncelikIndex.get(b) : 999;
+    if (oncelikA !== oncelikB) return oncelikA - oncelikB;
+    const puanA = ar?.[a]?.puan || 0;
+    const puanB = ar?.[b]?.puan || 0;
+    return puanA - puanB;
+  })[0];
+}
+
 export function aiArastirmaTick(id) {
   const fr = oyun.fraksiyon[id];
   if (!fr) return;
@@ -75,7 +127,12 @@ export function aiArastirmaTick(id) {
   const sahip = oyun.bolgeler.filter((b) => b.owner === id);
   const univBonus = sahip.filter((b) => b.ozellik === "universite").length * 2;
   const labBonus = sahip.reduce((t, b) => t + binaBonus(b, "arastirmaBonus"), 0);
-  const aktifDal = ar.aktifDal || "org";
+  let aktifDal = ar.aktifDal || Object.keys(ARASTIRMA_DALLARI)[0];
+  const aktifDalMax = ARASTIRMA_DALLARI[aktifDal]?.seviyeler?.length || 0;
+  if (!ar[aktifDal] || ar[aktifDal].seviye >= aktifDalMax) {
+    aktifDal = aiSonrakiArastirmaDali(id, ar);
+    ar.aktifDal = aktifDal;
+  }
   const dal = ar[aktifDal];
   if (!dal) return;
 
@@ -83,9 +140,7 @@ export function aiArastirmaTick(id) {
   const hedef = ARASTIRMA_DALLARI[aktifDal]?.seviyeler[dal.seviye];
   if (hedef && dal.puan >= hedef.gerekPuan) {
     dal.seviye++;
-    if (dal.seviye >= 3 && aktifDal === "org") ar.aktifDal = "ekonomi";
-    else if (dal.seviye >= 3 && aktifDal === "ekonomi") ar.aktifDal = "istihbarat";
-    else if (dal.seviye >= 3 && aktifDal === "istihbarat") ar.aktifDal = Math.random() < 0.5 ? "org" : "ekonomi";
+    ar.aktifDal = aiSonrakiArastirmaDali(id, ar);
     logYaz(`🧠 ${fr.ad} araştırmada ilerledi: ${hedef.ad}.`);
   }
 }
@@ -519,9 +574,10 @@ function aiStratejiDurumu(id, sahip, fr) {
 }
 
 function aiBribeMaliyetCarpani(stratejiMod) {
-  const baz = oyun.zorluk === "zor" ? 1.12 : (oyun.zorluk === "kolay" ? 1.28 : 1.2);
-  if (stratejiMod === "toparlanma") return baz * 1.12;
-  if (stratejiMod === "baski") return baz * 1.04;
+  // AI, tarafsız genişlemede oyuncuya göre daha agresif maliyetle hareket eder.
+  const baz = oyun.zorluk === "zor" ? 0.56 : (oyun.zorluk === "kolay" ? 0.72 : 0.64);
+  if (stratejiMod === "toparlanma") return baz * 1.08;
+  if (stratejiMod === "baski") return baz * 0.95;
   return baz;
 }
 
@@ -599,12 +655,16 @@ export function aiCasuslukYap(id) {
   if (!hedef) return;
 
   const istihbarat = aiArastirmaEfekt(id, "suikastBonus");
+  const operasyonIndirim = Math.min(0.6, Math.max(0, aiArastirmaEfekt(id, "operasyonMaliyetIndirim")));
+  const suikastMaliyet = Math.max(80, Math.round(300 * (1 - operasyonIndirim)));
+  const kesifMaliyet = Math.max(25, Math.round(100 * (1 - operasyonIndirim)));
+  const kesifSure = Math.max(3, 5 + Math.round(aiArastirmaEfekt(id, "kesifSureBonus")));
 
-  if (fr.para >= 300 && Math.random() < 0.28 + istihbarat) {
+  if (fr.para >= suikastMaliyet && Math.random() < 0.28 + istihbarat) {
     const suikastTasit = aiOperasyonTasitAyir(id, 4);
     if (suikastTasit) {
       const sans = Math.max(0.1, Math.min(0.9, 0.42 + istihbarat - (hedef.guv + hedef.yGuv) * 0.03));
-      fr.para -= 300;
+      fr.para -= suikastMaliyet;
       if (Math.random() < sans) {
         oyun.fraksiyon.biz._liderDevreDisi = oyun.tur + 6;
         fr._ofke = 0;
@@ -619,11 +679,11 @@ export function aiCasuslukYap(id) {
     }
   }
 
-  if (fr.para >= 100 && Math.random() < 0.35) {
+  if (fr.para >= kesifMaliyet && Math.random() < 0.35) {
     const kesifTasit = aiOperasyonTasitAyir(id, 2);
     if (kesifTasit) {
-      fr.para -= 100;
-      hedef._kesifAi = { owner: id, bitis: oyun.tur + 5 };
+      fr.para -= kesifMaliyet;
+      hedef._kesifAi = { owner: id, bitis: oyun.tur + kesifSure };
       logYaz(`🔍 ${fr.ad} ${hedef.ad} hakkında keşif ağı kurdu.`);
       aiOperasyonTasitIade(kesifTasit);
     }
@@ -699,6 +759,7 @@ export function aiSaldiriHareket(id) {
   const fr = oyun.fraksiyon[id];
   if (!fr) return;
   const z = aiZorlukAyari();
+  const guc = Math.max(1, gucPuani(id));
 
   const sahip = oyun.bolgeler.filter((b) => b.owner === id);
   const aiBolgeSay = sahip.length;
@@ -726,14 +787,14 @@ export function aiSaldiriHareket(id) {
   }
   const tarafsizHamleSans = Math.min(
     0.9,
-    Math.max(0.06, (z.aiBribePref ?? 0.5) * strateji.tarafsizCarpani * dengeCarpani)
+    Math.max(0.14, (z.aiBribePref ?? 0.5) * 1.35 * strateji.tarafsizCarpani * dengeCarpani)
   );
-  const tarafsizCooldown = Math.max(3, (z.aiCooldownMin ?? 1) + 3);
+  const tarafsizCooldown = Math.max(2, (z.aiCooldownMin ?? 1) + 1);
   const sonTarafsizTur = Number(fr._aiTarafsizSonTur || -999);
   const tarafsizHazir = (oyun.tur - sonTarafsizTur) >= tarafsizCooldown;
   const aiMaliyetCarpani = aiBribeMaliyetCarpani(strateji.mod);
   if (tarafsizHazir && tarafsizAdaylar.length && Math.random() < tarafsizHamleSans) {
-    const rezerv = Math.max(120, Math.round(ownerBakimToplami(id) * 2.2));
+    const rezerv = Math.max(40, Math.round(ownerBakimToplami(id) * 1.2));
     let secim = [...tarafsizAdaylar]
       .map((a) => ({ ...a, aiCost: Math.ceil(a.cost * aiMaliyetCarpani) }))
       .sort((a, b) => (b.skor - a.skor) || (a.aiCost - b.aiCost))
@@ -741,21 +802,21 @@ export function aiSaldiriHareket(id) {
     let maliyet = secim ? secim.aiCost : 0;
     let sans = 1;
     let mod = "satinalma";
-    if (!secim) {
+      if (!secim) {
       const nufuzAday = [...tarafsizAdaylar]
         .sort((a, b) => (b.skor - a.skor) || (a.cost - b.cost))
-        .find((a) => fr.para >= 180);
+        .find((a) => fr.para >= 90);
       if (nufuzAday) {
         secim = nufuzAday;
         const odemeOrani = Math.max(0.18, Math.min(0.7, fr.para / Math.max(1, nufuzAday.cost)));
-        maliyet = Math.max(150, Math.round(nufuzAday.cost * Math.min(0.45, odemeOrani)));
+        maliyet = Math.max(80, Math.round(nufuzAday.cost * Math.min(0.35, odemeOrani)));
         const kaynakDestek = oyun.birimler
           .filter((u) => u.owner === id && u.konumId === nufuzAday.kaynak.id && !u.hedefId && !u._sil)
           .reduce((t, u) => t + (u.adet || 0), 0);
         const guvenlik = (nufuzAday.hedef.guv || 0) + (nufuzAday.hedef.yGuv || 0);
         sans = Math.max(
-          0.14,
-          Math.min(0.76, 0.24 + odemeOrani * 0.45 + Math.min(0.18, kaynakDestek / 90) - guvenlik * 0.035)
+          0.22,
+          Math.min(0.86, 0.30 + odemeOrani * 0.5 + Math.min(0.2, kaynakDestek / 80) - guvenlik * 0.03)
         );
         mod = "nufuz";
       }
@@ -771,7 +832,11 @@ export function aiSaldiriHareket(id) {
           yiginaEkle(secim.hedef.id, id, takviye);
           DIPLO_OWNERLER
             .filter((oid) => oid !== id && oyun.fraksiyon?.[oid])
-            .forEach((oid) => iliskiDegistir(id, oid, -5, "Tarafsız bölge rüşvetle alındı"));
+            .forEach((oid) => {
+              if (iliskiDegeri(id, oid) > -35) {
+                iliskiDegistir(id, oid, -2, "Tarafsız bölge rüşvetle alındı");
+              }
+            });
           logYaz(`${fr.ad} ${mod === "satinalma" ? "satın alarak" : "nüfuz kurarak"} ${secim.hedef.ad} bölgesini aldı.`);
           fr._aiGenislemeSonTur = oyun.tur;
         } else if (mod === "nufuz") {
@@ -812,6 +877,15 @@ export function aiSaldiriHareket(id) {
       .map((idH) => bolgeById(idH))
       .filter((h) => h && h.owner !== id && h.owner !== "tarafsiz")
       .filter((h) => diplomasiSaldiriMumkunMu(id, h.owner))
+      .filter((h) => {
+        const aktifSavas = savastaMi(id, h.owner);
+        if (aktifSavas) return true;
+        const iliski = iliskiDegeri(id, h.owner);
+        const iliskiEsigi = strateji.mod === "baski" ? -8 : -15;
+        if (iliski <= iliskiEsigi) return true;
+        const gucUstunluk = guc > Math.max(1, gucPuani(h.owner)) * 1.9;
+        return gucUstunluk && Math.random() < 0.18;
+      })
       .filter((h) => !(h.korumaTur && oyun.tur < h.korumaTur));
     if (!hedefler.length) continue;
 

@@ -262,12 +262,11 @@ export function ownerBakimToplami(owner) {
 
   const birimGideri = birimGideriTemel * maasCarpani;
 
-  const tasitToplam = ownerBolgeler.reduce((toplam, b) => {
-    const tasit = b.tasit || { motor: 0, araba: 0 };
-    toplam.motor += tasit.motor || 0;
-    toplam.araba += tasit.araba || 0;
-    return toplam;
-  }, { motor: 0, araba: 0 });
+  const ownerTasit = oyun.fraksiyon?.[owner]?.tasit || { motor: 0, araba: 0 };
+  const tasitToplam = {
+    motor: Math.max(0, Math.floor(Number(ownerTasit.motor) || 0)),
+    araba: Math.max(0, Math.floor(Number(ownerTasit.araba) || 0)),
+  };
   const tasitGideri =
     tasitToplam.motor * TASIT_TIPLERI.motor.bakim +
     tasitToplam.araba * TASIT_TIPLERI.araba.bakim;

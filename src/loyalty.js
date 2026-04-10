@@ -6,6 +6,7 @@ import { showToast } from "./modal.js";
 import { sesCal } from "./audio.js";
 import { savasKazanmaIhtimali } from "./combat.js";
 import { grupEfektifSavunma } from "./units.js";
+import { arastirmaEfekt } from "./research.js";
 
 export const SADAKAT_BASLANGIC = 55;
 const ISYAN_ESIGI = 12;
@@ -58,7 +59,9 @@ export function sadakatTick() {
     b.sadakat = Math.max(0, Math.min(100, onceki + degisim));
 
     // İsyan riski: sadece bizim bölge, düşük sadakat
-    if (b.owner === "biz" && b.sadakat < ISYAN_ESIGI && Math.random() < 0.12) {
+    const isyanRiskAzaltim = Math.min(0.75, Math.max(0, arastirmaEfekt("isyanRiskAzaltma")));
+    const isyanSans = 0.12 * (1 - isyanRiskAzaltim);
+    if (b.owner === "biz" && b.sadakat < ISYAN_ESIGI && Math.random() < isyanSans) {
       if (Number.isFinite(b._isyanKorumaTur) && oyun.tur < b._isyanKorumaTur) return;
       isyanCikar(b);
     }
@@ -122,7 +125,8 @@ function isyanCikar(b) {
   const eskiOwner = b.owner;
   const guvTop = Math.max(0, (b.guv || 0) + (b.yGuv || 0));
   const savunanBirimler = bolgeSavunmaBirimleri(b.id, eskiOwner);
-  const savunanEfektif = Math.max(0, Math.round(grupEfektifSavunma(savunanBirimler)));
+  const bastirmaBonus = eskiOwner === "biz" ? Math.max(0, arastirmaEfekt("isyanBastirmaBonus")) : 0;
+  const savunanEfektif = Math.max(0, Math.round(grupEfektifSavunma(savunanBirimler) * (1 + bastirmaBonus)));
   const isyanciAdet = isyanSaldiriGucu(b);
   const isyanciEfektif = Math.max(1, Math.round(isyanciAdet * (0.95 + Math.random() * 0.3)));
   const isyanKazanmaSans = savasKazanmaIhtimali(isyanciEfektif, Math.max(1, savunanEfektif), guvTop);

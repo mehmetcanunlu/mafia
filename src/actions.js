@@ -1,13 +1,12 @@
 import { oyun, bolgeById, kullanilabilirBiz, ownerToplamPersonel, ownerPersonelTavan } from "./state.js";
 import { logYaz, uiGuncel } from "./ui.js";
 import { AYAR, SOHRET, BINA_TIPLERI, DIPLOMASI, MEKANIK, EKONOMI_DENGE } from "./config.js";
-import { kisaRota } from "./map.js";
 import { saldiriMaliyeti } from "./combat.js";
 import { sohretCarpani } from "./state.js";
 import { yiginaEkle } from "./state.js";
 import { showAlert, showConfirm, showPrompt } from "./modal.js";
 import { BIRIM_TIPLERI, TASIT_TIPLERI } from "./units.js";
-import { kesifYap, suikastYap } from "./spy.js";
+import { kesifYap, suikastYap, suikastMaliyeti } from "./spy.js";
 import { arastirmaEfekt } from "./research.js";
 import { konvoyBaslaAnimasyonu } from "./animations.js";
 import { ownerTasit, ownerTasitAyir, ownerTasitIade, ownerTasitKombinasyonu, ownerToplamKapasite, bolgeFetihTasitGanmetiEkle } from "./logistics.js";
@@ -19,11 +18,13 @@ import {
   ticaretTeklifiEt,
   sabotajTeklifiEt,
   rusvetVer,
+  rusvetTahminiArtis,
   tehditEt,
   istihbaratPaylas,
   diplomasiSaldiriMumkunMu,
   diplomasiSaldiriYasakSebebi,
   diplomasiSaldiriBaslat,
+  savasSkorOzeti,
   iliskiDurumu,
   iliskiDegeri,
   iliskiDegistir,
@@ -96,6 +97,55 @@ function rotaDostTransitVarMi(owner, rota = []) {
   });
 }
 
+function rotaDugumuGuvenliMi(owner, bolge) {
+  if (!owner || !bolge) return false;
+  if (bolge.owner === owner) return true;
+  if (bolge.owner === "tarafsiz") return false;
+  return isDostIttifak(owner, bolge.owner) || isDostCete(owner, bolge.owner);
+}
+
+function guvenliKisaRota(owner, basId, hedefId, secenekler = null) {
+  const allowRiskliHedef = !!(secenekler && secenekler.allowRiskliHedef);
+  if (basId === hedefId) return [basId];
+  const bas = bolgeById(basId);
+  const hedef = bolgeById(hedefId);
+  if (!bas || !hedef) return null;
+  if (!rotaDugumuGuvenliMi(owner, bas)) return null;
+  if (!rotaDugumuGuvenliMi(owner, hedef)) {
+    if (!(allowRiskliHedef && hedef.owner !== "tarafsiz")) return null;
+  }
+
+  const q = [basId];
+  const came = {};
+  const vis = new Set([basId]);
+
+  while (q.length) {
+    const u = q.shift();
+    for (const v of oyun.komsu[u] || []) {
+      if (vis.has(v)) continue;
+      const vb = bolgeById(v);
+      if (!vb) continue;
+      if (!rotaDugumuGuvenliMi(owner, vb)) {
+        const riskliHedefGecis = allowRiskliHedef && v === hedefId && vb.owner !== "tarafsiz";
+        if (!riskliHedefGecis) continue;
+      }
+      vis.add(v);
+      came[v] = u;
+      if (v === hedefId) {
+        const path = [v];
+        let cur = v;
+        while (cur !== basId) {
+          cur = came[cur];
+          path.push(cur);
+        }
+        return path.reverse();
+      }
+      q.push(v);
+    }
+  }
+  return null;
+}
+
 function rotaIlkAdiminiAyir(rota) {
   if (!Array.isArray(rota) || rota.length < 2) return null;
   return {
@@ -119,7 +169,9 @@ function ownerEnYakinYiginKaynak(owner, hedefId) {
   const aday = aktifKonvoylar(owner)
     .map((k) => {
       const bolge = bolgeById(k.konumId);
-      const rota = bolge ? kisaRota(bolge.id, hedefId) : null;
+      const rota = bolge
+        ? guvenliKisaRota(owner, bolge.id, hedefId, { allowRiskliHedef: true })
+        : null;
       if (!bolge || !rota || rota.length < 2) return null;
       return { birim: k, bolge, rota, tur: rota.length - 1 };
     })
@@ -143,13 +195,21 @@ function ownerBolgeHazirToplam(owner, bolgeId) {
   return ownerBolgeHazirBirimleri(owner, bolgeId).reduce((t, k) => t + (k.adet || 0), 0);
 }
 
+function ownerHazirToplam(owner) {
+  return oyun.birimler
+    .filter((k) => k.owner === owner)
+    .filter((k) => !k._sil && (k.adet || 0) > 0)
+    .filter((k) => !k.hedefId && (!k.rota || k.rota.length === 0))
+    .reduce((t, k) => t + (k.adet || 0), 0);
+}
+
 function ownerSaldiriKaynakAdaylari(owner, hedefId) {
   return oyun.bolgeler
     .filter((b) => b.owner === owner)
     .map((b) => {
       const adet = ownerBolgeHazirToplam(owner, b.id);
       if (adet <= 0) return null;
-      const rota = kisaRota(b.id, hedefId);
+      const rota = guvenliKisaRota(owner, b.id, hedefId, { allowRiskliHedef: true });
       if (!rota || rota.length < 2) return null;
       return {
         bolge: b,
@@ -250,8 +310,11 @@ function sinirla(v, min, max) {
 
 function suclulukEkle(miktar) {
   const a = asayisDurumu();
-  a.sucluluk = sinirla(a.sucluluk + miktar, 0, 200);
-  a.polisBaski = sinirla(a.polisBaski + miktar * 0.45, 0, 100);
+  const suclulukAzaltimi = sinirla(arastirmaEfekt("suclulukArtisAzaltma"), 0, 0.7);
+  const polisKoruma = sinirla(arastirmaEfekt("polisKorumaBonus"), 0, 0.5);
+  const netMiktar = miktar > 0 ? miktar * (1 - suclulukAzaltimi) : miktar;
+  a.sucluluk = sinirla(a.sucluluk + netMiktar, 0, 200);
+  a.polisBaski = sinirla(a.polisBaski + netMiktar * 0.45 * (1 - polisKoruma * 0.5), 0, 100);
 }
 
 function ekonomiDurumu() {
@@ -300,6 +363,7 @@ function birimAlimLimitleri() {
   if (oyun.fraksiyon.biz.para <= EKONOMI_DENGE.alimiTurParaCezaEsik) {
     turKotasi -= EKONOMI_DENGE.alimiTurParaCeza;
   }
+  turKotasi += Math.max(0, Math.round(arastirmaEfekt("alimTurKotasiBonus")));
   turKotasi = Math.max(3, turKotasi);
 
   const toplamKapasite = ownerPersonelTavan("biz");
@@ -319,7 +383,9 @@ function alimEkMaliyetiHesapla(adet) {
   const harac = EKONOMI_DENGE.haracSeviyeleri[eco.haracSeviye] || EKONOMI_DENGE.haracSeviyeleri.orta;
   const haracCarpani =
     1 + Math.max(0, (harac.gelirCarpani || 1) - 1) * EKONOMI_DENGE.alimiEkMaliyetHaracCarpani;
-  return Math.max(0, Math.round(guvenliAdet * EKONOMI_DENGE.alimiEkMaliyetKisiBasi * haracCarpani));
+  const alimIndirim = sinirla(arastirmaEfekt("alimEkMaliyetAzaltma"), 0, 0.45);
+  const maliyetCarpani = 1 - alimIndirim;
+  return Math.max(0, Math.round(guvenliAdet * EKONOMI_DENGE.alimiEkMaliyetKisiBasi * haracCarpani * maliyetCarpani));
 }
 
 function alimSadakatCezasiHesapla(oncekiAlim, yeniAlim) {
@@ -333,7 +399,9 @@ function alimSadakatCezasiHesapla(oncekiAlim, yeniAlim) {
   const eco = ekonomiDurumu();
   const haracCarpani =
     eco.haracSeviye === "yuksek" ? EKONOMI_DENGE.alimiSadakatYuksekHaracCarpani : 1;
-  return Number((etkiliAsim * EKONOMI_DENGE.alimiSadakatCezaKisiBasi * haracCarpani).toFixed(2));
+  const arastirmaAzaltimi = sinirla(arastirmaEfekt("alimSadakatCezaAzaltma"), 0, 0.6);
+  const ceza = etkiliAsim * EKONOMI_DENGE.alimiSadakatCezaKisiBasi * haracCarpani * (1 - arastirmaAzaltimi);
+  return Number(ceza.toFixed(2));
 }
 
 function alimSadakatCezasiUygula(oncekiAlim, yeniAlim) {
@@ -651,7 +719,9 @@ export async function teslimAl() {
 
   hedef.korumaTur = (oyun.tur || 0) + 1;
   ["ai1", "ai2", "ai3"].forEach((ai) => {
-    if (oyun.fraksiyon?.[ai]) iliskiDegistir("biz", ai, -5, "Tarafsız bölge rüşvetle satın alındı");
+    if (oyun.fraksiyon?.[ai] && iliskiDegeri("biz", ai) > -35) {
+      iliskiDegistir("biz", ai, -2, "Tarafsız bölge rüşvetle satın alındı");
+    }
   });
   logYaz(`${hedef.ad} bölgesi ${maliyet} ₺ karşılığında satın alındı.`);
   if ((tasitGanmeti.araba || 0) > 0 || (tasitGanmeti.motor || 0) > 0) {
@@ -693,8 +763,9 @@ export async function saldiri() {
   }
 
   const girdi = await showPrompt(
-    `Kaç adam göndereceksin?\nKaynak (${kaynakBolge.ad}) hazır birlik: ${kaynakToplam}\n` +
-    `${lojistikKapasiteMetni(kaynakBolge)}\nHedef ${turSur} tur uzakta.`,
+    `Kaç adam göndereceksin?\nKaynak: ${kaynakBolge.ad}\nKaynak hazır birlik: ${kaynakToplam}\n` +
+    `Toplam hazır birlik: ${ownerHazirToplam("biz")}\n` +
+    `${lojistikKapasiteMetni("biz")}\nHedef ${turSur} tur uzakta.`,
     'Saldırı'
   );
   if (girdi === null) return;
@@ -706,7 +777,7 @@ export async function saldiri() {
   const tasitPlan = ownerTasitKombinasyonu("biz", gonder);
   if (!tasitPlan) {
     await showAlert(
-      `Bu hareket için yeterli taşıt yok.\nGerekli kapasite: ${gonder}\n${lojistikKapasiteMetni(kaynakBolge, gonder)}`
+      `Bu hareket için yeterli taşıt yok.\nGerekli kapasite: ${gonder}\n${lojistikKapasiteMetni("biz", gonder)}`
     );
     return;
   }
@@ -728,7 +799,8 @@ export async function saldiri() {
 
   const onay = await showConfirm(
     `${hedef.ad} bölgesine ${gonder} adamla sefer düzenle.\nMaliyet: ${maliyet} ₺\n` +
-    `Taşıt: ${tasitPlanMetni(tasitPlan)}\n${lojistikKapasiteMetni(kaynakBolge, gonder)}\n` +
+    `Taşıt: ${tasitPlanMetni(tasitPlan)}\nToplam hazır birlik: ${ownerHazirToplam("biz")}\n` +
+    `${lojistikKapasiteMetni("biz", gonder)}\n` +
     `Tahmini varış: ${turSur} tur sonra.\nDevam?`,
     'Saldırıyı Onayla'
   );
@@ -848,7 +920,8 @@ export async function hareketEmriSaldiriBaslat() {
   const girdi = await showPrompt(
     `${kaynakSecim.bolge.ad} → ${hedef.ad}\n` +
     `Kaç birlik gönderilsin?\nMevcut: ${kaynakSecim.adet}\n` +
-    `${lojistikKapasiteMetni(kaynakSecim.bolge)}\nTahmini varış: ${kaynakSecim.tur} tur`,
+    `Toplam hazır birlik: ${ownerHazirToplam("biz")}\n` +
+    `${lojistikKapasiteMetni("biz")}\nTahmini varış: ${kaynakSecim.tur} tur`,
     "Saldırı Emri",
     String(varsayilan)
   );
@@ -903,7 +976,8 @@ export async function koordineliSaldiriBaslat() {
     await showAlert("Gönderilecek birlik yok.");
     return;
   }
-  const bizRota = bizimKaynak.rota || kisaRota(bizimKaynak.bolge.id, hedef.id);
+  const bizRota = bizimKaynak.rota
+    || guvenliKisaRota("biz", bizimKaynak.bolge.id, hedef.id, { allowRiskliHedef: true });
   const bizRotaPlan = rotaIlkAdiminiAyir(bizRota);
   if (!bizRotaPlan) {
     await showAlert("Bizim kaynak için geçerli rota bulunamadı.");
@@ -913,7 +987,8 @@ export async function koordineliSaldiriBaslat() {
 
   const girdi = await showPrompt(
     `Koordineli saldırı: ${hedef.ad}\nMüttefik: ${ittifakAd}\nKaynak: ${bizimKaynak.bolge.ad}\n` +
-    `${lojistikKapasiteMetni(bizimKaynak.bolge)}\nKaç asker göndereceksin? (max ${maxBiz})`,
+    `Toplam hazır birlik: ${ownerHazirToplam("biz")}\n` +
+    `${lojistikKapasiteMetni("biz")}\nKaç asker göndereceksin? (max ${maxBiz})`,
     "Koordineli Saldırı"
   );
   if (girdi === null) return;
@@ -925,7 +1000,7 @@ export async function koordineliSaldiriBaslat() {
 
   const bizPlan = ownerTasitKombinasyonu("biz", bizAdet);
   if (!bizPlan) {
-    await showAlert(`Bizim birlik için taşıt yetersiz.\n${lojistikKapasiteMetni(bizimKaynak.bolge, bizAdet)}`);
+    await showAlert(`Bizim birlik için taşıt yetersiz.\n${lojistikKapasiteMetni("biz", bizAdet)}`);
     return;
   }
 
@@ -936,7 +1011,8 @@ export async function koordineliSaldiriBaslat() {
     return;
   }
   const ittifakRota =
-    secilenIttifak.kaynak.rota || kisaRota(secilenIttifak.kaynak.bolge.id, hedef.id);
+    secilenIttifak.kaynak.rota
+    || guvenliKisaRota(secilenIttifak.owner, secilenIttifak.kaynak.bolge.id, hedef.id, { allowRiskliHedef: true });
   const ittifakRotaPlan = rotaIlkAdiminiAyir(ittifakRota);
   if (!ittifakRotaPlan) {
     await showAlert(`${ittifakAd} kaynak konumu için geçerli rota bulunamadı.`);
@@ -959,7 +1035,8 @@ export async function koordineliSaldiriBaslat() {
   const onay = await showConfirm(
     `${hedef.ad} için koordineli saldırı başlatılsın mı?\n` +
     `Biz: ${bizAdet} kişi (${tasitPlanMetni(bizPlan)}, ~${bizRota.length - 1} tur)\n` +
-    `${lojistikKapasiteMetni(bizimKaynak.bolge, bizAdet)}\n` +
+    `Toplam hazır birlik: ${ownerHazirToplam("biz")}\n` +
+    `${lojistikKapasiteMetni("biz", bizAdet)}\n` +
     `${ittifakAd}: ${ittifakAdet} kişi (${tasitPlanMetni(ittifakPlan)}, ~${ittifakRota.length - 1} tur)`,
     "Koordineli Saldırı Onayı"
   );
@@ -975,7 +1052,7 @@ export async function koordineliSaldiriBaslat() {
   if (!bizAyrilanTasit) {
     bizimKaynak.birim.adet += bizAdet;
     bizimKaynak.birim._sil = false;
-    await showAlert(`Bizim taşıt stoğu değişti. ${tasitStokMetni(bizimKaynak.bolge)}`);
+    await showAlert(`Bizim taşıt stoğu değişti. ${tasitStokMetni("biz")}`);
     return;
   }
 
@@ -1067,7 +1144,8 @@ export async function hareketEmriBaslat() {
   }
 
   const girdi = await showPrompt(
-    `Kaç adam göndereceksin?\nMevcut: ${mevcut}\n${lojistikKapasiteMetni(secili)}`,
+    `Kaç adam göndereceksin?\nKaynak: ${secili.ad}\nKaynak hazır birlik: ${mevcut}\n` +
+    `Toplam hazır birlik: ${ownerHazirToplam("biz")}\n${lojistikKapasiteMetni("biz")}`,
     'Hareket Emri'
   );
   if (girdi === null) return;
@@ -1082,18 +1160,38 @@ export async function hareketEmriBaslat() {
   uiGuncel(callbacklar);
 }
 
-function bizToplantiNoktasiGetir() {
+function toplantiNoktasiDurumuGetir(owner = "biz") {
   if (!oyun.toplantiNoktasi || typeof oyun.toplantiNoktasi !== "object") {
-    oyun.toplantiNoktasi = { biz: null, ai1: null, ai2: null, ai3: null };
+    oyun.toplantiNoktasi = { biz: [], ai1: [], ai2: [], ai3: [] };
   }
-  const hedefId = oyun.toplantiNoktasi.biz;
-  if (hedefId === null || hedefId === undefined) return null;
-  const hedef = bolgeById(hedefId);
-  if (!hedef || hedef.owner !== "biz") {
-    oyun.toplantiNoktasi.biz = null;
-    return null;
-  }
-  return hedef;
+  const idCoz = (hamId) => {
+    const direkt = bolgeById(hamId);
+    if (direkt) return direkt.id;
+    const eslesen = (oyun.bolgeler || []).find((b) => String(b?.id) === String(hamId));
+    return eslesen ? eslesen.id : null;
+  };
+  const ham = oyun.toplantiNoktasi[owner];
+  const adaylar = Array.isArray(ham)
+    ? ham
+    : (ham !== null && ham !== undefined ? [ham] : []);
+  const temizMap = new Map();
+  adaylar.forEach((id) => {
+    if (id === null || id === undefined) return;
+    const cozulmus = idCoz(id);
+    if (cozulmus === null || cozulmus === undefined) return;
+    const b = bolgeById(cozulmus);
+    if (!b || b.owner !== owner) return;
+    temizMap.set(String(cozulmus), cozulmus);
+  });
+  const temizIdler = [...temizMap.values()];
+  oyun.toplantiNoktasi[owner] = temizIdler;
+  return temizIdler;
+}
+
+function bizToplantiNoktalariGetir() {
+  return toplantiNoktasiDurumuGetir("biz")
+    .map((id) => bolgeById(id))
+    .filter((b) => !!b && b.owner === "biz");
 }
 
 export async function toplantiNoktasiYap() {
@@ -1102,53 +1200,82 @@ export async function toplantiNoktasiYap() {
     await showAlert("Toplantı noktası için kendi bölgeni seçmelisin.");
     return;
   }
-  if (!oyun.toplantiNoktasi || typeof oyun.toplantiNoktasi !== "object") {
-    oyun.toplantiNoktasi = { biz: null, ai1: null, ai2: null, ai3: null };
+  const idler = toplantiNoktasiDurumuGetir("biz");
+  const seciliId = secili.id;
+  const varMi = idler.some((id) => String(id) === String(seciliId));
+  if (varMi) {
+    oyun.toplantiNoktasi.biz = idler.filter((id) => String(id) !== String(seciliId));
+    logYaz(`📍 Toplanma noktasından kaldırıldı: ${secili.ad}`);
+  } else {
+    oyun.toplantiNoktasi.biz = [...idler, seciliId];
+    logYaz(`📍 Toplanma noktası eklendi: ${secili.ad}`);
   }
-  if (oyun.toplantiNoktasi.biz === secili.id) {
-    await showAlert(`${secili.ad} zaten toplantı noktası.`);
+  uiGuncel(callbacklar);
+}
+
+export async function toplantiNoktalariSifirla() {
+  const idler = toplantiNoktasiDurumuGetir("biz");
+  if (!idler.length) {
+    await showAlert("Sıfırlanacak toplanma noktası yok.");
     return;
   }
-  oyun.toplantiNoktasi.biz = secili.id;
-  logYaz(`📍 Toplantı noktası ayarlandı: ${secili.ad}`);
+  const adlar = idler
+    .map((id) => bolgeById(id)?.ad)
+    .filter(Boolean);
+  const onay = await showConfirm(
+    `Tüm toplanma noktaları sıfırlansın mı?\n${adlar.join(", ")}`,
+    "Toplanma Noktaları"
+  );
+  if (!onay) return;
+  oyun.toplantiNoktasi.biz = [];
+  logYaz(`🧹 Toplanma noktaları sıfırlandı (${idler.length} bölge).`);
   uiGuncel(callbacklar);
 }
 
 export async function toplantiNoktasinaCagir() {
-  const hedef = bizToplantiNoktasiGetir();
-  if (!hedef) {
-    await showAlert("Önce bir toplantı noktası belirlemelisin.");
+  const hedefler = bizToplantiNoktalariGetir();
+  if (!hedefler.length) {
+    await showAlert("Önce en az bir toplanma noktası belirlemelisin.");
     return;
   }
+  const hedefIdSet = new Set(hedefler.map((h) => String(h.id)));
 
   const kaynaklar = [];
   const rotaYok = [];
   oyun.bolgeler
-    .filter((b) => b.owner === "biz" && b.id !== hedef.id)
+    .filter((b) => b.owner === "biz" && !hedefIdSet.has(String(b.id)))
     .forEach((b) => {
       const adet = ownerBolgeHazirToplam("biz", b.id);
       if (adet <= 0) return;
-      const rota = kisaRota(b.id, hedef.id);
-      if (!Array.isArray(rota) || rota.length < 2) {
-        rotaYok.push(b.ad);
-        return;
-      }
-      const rotaPlan = rotaIlkAdiminiAyir(rota);
-      if (!rotaPlan) {
+
+      let enYakin = null;
+      hedefler.forEach((hedef) => {
+        const rota = guvenliKisaRota("biz", b.id, hedef.id);
+        if (!Array.isArray(rota) || rota.length < 2) return;
+        const rotaPlan = rotaIlkAdiminiAyir(rota);
+        if (!rotaPlan) return;
+        const tur = Math.max(1, rota.length - 1);
+        if (!enYakin || tur < enYakin.tur) {
+          enYakin = { hedef, rota, rotaPlan, tur };
+        }
+      });
+
+      if (!enYakin) {
         rotaYok.push(b.ad);
         return;
       }
       kaynaklar.push({
         bolge: b,
         adet,
-        rota,
-        rotaPlan,
-        gecisTransit: rotaDostTransitVarMi("biz", rota),
+        hedef: enYakin.hedef,
+        rota: enYakin.rota,
+        rotaPlan: enYakin.rotaPlan,
+        gecisTransit: rotaDostTransitVarMi("biz", enYakin.rota),
       });
     });
 
   if (!kaynaklar.length) {
-    await showAlert(rotaYok.length ? "Toplantı noktasına çağrı için geçerli rota yok." : "Çağırılacak hazır birlik yok.");
+    await showAlert(rotaYok.length ? "Toplanma noktalarına çağrı için geçerli rota yok." : "Çağırılacak hazır birlik yok.");
     return;
   }
 
@@ -1209,9 +1336,17 @@ export async function toplantiNoktasinaCagir() {
     konvoyBaslaAnimasyonu(kaynak.bolge.id);
   });
 
+  const dagilim = {};
+  kaynaklar.forEach((k) => {
+    const ad = k.hedef?.ad || "Bilinmeyen";
+    dagilim[ad] = (dagilim[ad] || 0) + (k.adet || 0);
+  });
+  const dagilimMetni = Object.entries(dagilim)
+    .map(([ad, adet]) => `${ad}: ${adet}`)
+    .join(" | ");
   const rotaYokEk = rotaYok.length ? ` Rota yok: ${rotaYok.join(", ")}.` : "";
   logYaz(
-    `📣 Toplantı noktasına çağrı: ${kaynaklar.length} bölgeden ${toplamAdet} birlik ${hedef.ad} hedefine yola çıktı.${rotaYokEk}`
+    `📣 Toplanma çağrısı: ${kaynaklar.length} bölgeden ${toplamAdet} birlik en yakın noktalara yönlendirildi (${dagilimMetni}).${rotaYokEk}`
   );
   uiGuncel(callbacklar);
 }
@@ -1234,7 +1369,8 @@ export async function hizliTransferSeciliBolgeden(hedefId) {
 
   const varsayilan = Math.min(mevcut, Math.max(1, Math.floor(mevcut * 0.5)));
   const girdi = await showPrompt(
-    `${kaynak.ad} → ${hedef.ad}\nKaç birlik gönderilsin?\nMevcut: ${mevcut}\n${lojistikKapasiteMetni(kaynak)}`,
+    `${kaynak.ad} → ${hedef.ad}\nKaç birlik gönderilsin?\nKaynak hazır birlik: ${mevcut}\n` +
+    `Toplam hazır birlik: ${ownerHazirToplam("biz")}\n${lojistikKapasiteMetni("biz")}`,
     "Hızlı Transfer",
     String(varsayilan)
   );
@@ -1279,9 +1415,9 @@ export async function hareketEmriHedefSec(hedefId) {
     return;
   }
 
-  const rota = kisaRota(kaynak.id, hedef.id);
+  const rota = guvenliKisaRota("biz", kaynak.id, hedef.id, { allowRiskliHedef: hedef.owner !== "biz" });
   if (!rota || rota.length < 2) {
-    await showAlert("Bu hedefe ulaşan bir rota bulunamadı.");
+    await showAlert("Bu hedefe güvenli bir rota bulunamadı (ara bölgeler tarafsız/düşman olabilir).");
     oyun.hareketEmri = null;
     uiGuncel(callbacklar);
     return;
@@ -1298,7 +1434,7 @@ export async function hareketEmriHedefSec(hedefId) {
   const tasitPlan = ownerTasitKombinasyonu("biz", emir.adet);
   if (!tasitPlan) {
     await showAlert(
-      `Bu hareket için yeterli taşıt yok.\nGerekli kapasite: ${emir.adet}\n${lojistikKapasiteMetni(kaynak, emir.adet)}`
+      `Bu hareket için yeterli taşıt yok.\nGerekli kapasite: ${emir.adet}\n${lojistikKapasiteMetni("biz", emir.adet)}`
     );
     oyun.hareketEmri = null;
     uiGuncel(callbacklar);
@@ -1364,7 +1500,11 @@ export async function saldiriHizliAcil(hedefId) {
 
   const kaynaklar = oyun.bolgeler
     .filter((b) => b.owner === "biz")
-    .map((b) => ({ b, adet: ownerBolgeHazirToplam("biz", b.id), rota: kisaRota(b.id, hedef.id) }))
+    .map((b) => ({
+      b,
+      adet: ownerBolgeHazirToplam("biz", b.id),
+      rota: guvenliKisaRota("biz", b.id, hedef.id, { allowRiskliHedef: true }),
+    }))
     .filter((x) => x.adet > 0 && x.rota && x.rota.length >= 2);
   kaynaklar.sort((a, b) => {
     const rotaFark = (a.rota?.length || 999) - (b.rota?.length || 999);
@@ -1378,7 +1518,8 @@ export async function saldiriHizliAcil(hedefId) {
   }
 
   const adetStr = await showPrompt(
-    `Kaynak: ${kay.b.ad} (ID:${kay.b.id})\nKaç adam?\nMevcut: ${kay.adet}\n${lojistikKapasiteMetni(kay.b)}`,
+    `Kaynak: ${kay.b.ad} (ID:${kay.b.id})\nKaç adam?\nKaynak hazır birlik: ${kay.adet}\n` +
+    `Toplam hazır birlik: ${ownerHazirToplam("biz")}\n${lojistikKapasiteMetni("biz")}`,
     'Hızlı Saldırı — Birlik Sayısı'
   );
   if (adetStr === null) return;
@@ -1388,7 +1529,7 @@ export async function saldiriHizliAcil(hedefId) {
     return;
   }
 
-  const rota = kay.rota || kisaRota(kay.b.id, hedef.id);
+  const rota = kay.rota || guvenliKisaRota("biz", kay.b.id, hedef.id, { allowRiskliHedef: true });
   if (!rota || rota.length < 2) {
     await showAlert("Rota bulunamadı.");
     return;
@@ -1402,7 +1543,7 @@ export async function saldiriHizliAcil(hedefId) {
   const tasitPlan = ownerTasitKombinasyonu("biz", adet);
   if (!tasitPlan) {
     await showAlert(
-      `Bu hareket için yeterli taşıt yok.\nGerekli kapasite: ${adet}\n${lojistikKapasiteMetni(kay.b, adet)}`
+      `Bu hareket için yeterli taşıt yok.\nGerekli kapasite: ${adet}\n${lojistikKapasiteMetni("biz", adet)}`
     );
     return;
   }
@@ -1413,14 +1554,15 @@ export async function saldiriHizliAcil(hedefId) {
     return;
   }
   const onay = await showConfirm(
-    `${kay.b.ad} → ${hedef.ad} saldırısı\nBirlik: ${adet} | Maliyet: ${maliyet} ₺\n${lojistikKapasiteMetni(kay.b, adet)}`,
+    `${kay.b.ad} → ${hedef.ad} saldırısı\nBirlik: ${adet} | Maliyet: ${maliyet} ₺\n` +
+    `Toplam hazır birlik: ${ownerHazirToplam("biz")}\n${lojistikKapasiteMetni("biz", adet)}`,
     'Hızlı Saldırıyı Onayla'
   );
   if (!onay) return;
 
   const ayrilanTasit = ownerTasitAyir("biz", adet);
   if (!ayrilanTasit) {
-    await showAlert(`Taşıt stoğu değişti. ${tasitStokMetni(kay.b)}`);
+    await showAlert(`Taşıt stoğu değişti. ${tasitStokMetni("biz")}`);
     return;
   }
   const cekim = bolgedenBirlikCek("biz", kay.b.id, adet);
@@ -1453,7 +1595,7 @@ export async function saldiriHizliAcil(hedefId) {
 }
 
 /* === [BİRİM SATIN ALMA] === */
-export async function birimSatinAl(tip) {
+export async function birimSatinAl(tip, secenekler = null) {
   const bilgi = BIRIM_TIPLERI[tip];
   if (!bilgi || !bilgi.satinAlinabilir) {
     await showAlert("Bu birim tipi satın alınamaz.");
@@ -1467,39 +1609,10 @@ export async function birimSatinAl(tip) {
     return;
   }
 
+  const adet = secenekler?.shift5 ? 5 : 1;
   const indirim =
     tip === "tetikci" ? arastirmaEfekt("tetikciMaliyetIndirim") : 0;
   const maliyet = Math.ceil(bilgi.maliyet * (1 - indirim));
-  const birKisiEkMaliyet = alimEkMaliyetiHesapla(1);
-  const asgariMaliyet = maliyet + birKisiEkMaliyet;
-  if (oyun.fraksiyon.biz.para < asgariMaliyet) {
-    await showAlert(`Yetersiz para. Gerekli: ${asgariMaliyet} ₺ (birim + işe alım gideri)`);
-    return;
-  }
-
-  const onay = await showConfirm(
-    `${b.ad} bölgesine ${bilgi.ikon} ${bilgi.ad} al.\nBirim maliyeti: ${maliyet} ₺\n` +
-    `İşe alım gideri: ~${birKisiEkMaliyet} ₺ / kişi\nİpucu: Shift + Onay = 5 adet`,
-    "Birim Satın Al",
-    { ekButonEtiketi: "Miktar Gir", ekButonDegeri: "miktar" }
-  );
-  if (!onay) return;
-
-  let adet = onay === "shift5" ? 5 : 1;
-  if (onay === "miktar") {
-    const miktar = await showPrompt(
-      `${bilgi.ikon} ${bilgi.ad} için adet gir:`,
-      "Miktar Gir",
-      "1"
-    );
-    if (miktar === null) return;
-    const parsed = Number(miktar);
-    if (!Number.isFinite(parsed) || parsed <= 0 || !Number.isInteger(parsed)) {
-      await showAlert("Geçerli bir tam sayı gir (1, 2, 3...).");
-      return;
-    }
-    adet = parsed;
-  }
   const toplamMaliyet = maliyet * adet;
   const iseAlimMaliyeti = alimEkMaliyetiHesapla(adet);
   const genelMaliyet = toplamMaliyet + iseAlimMaliyeti;
@@ -1580,12 +1693,14 @@ export async function tasitSatinAl(tip) {
     await showAlert("Taşıt almak için kendi bölgeni seç.");
     return;
   }
-  if (oyun.fraksiyon.biz.para < bilgi.maliyet) {
-    await showAlert(`Yetersiz para. Gerekli: ${bilgi.maliyet} ₺`);
+  const tasitMaliyetIndirim = sinirla(arastirmaEfekt("tasitMaliyetIndirim"), 0, 0.45);
+  const birimMaliyet = Math.max(1, Math.ceil(bilgi.maliyet * (1 - tasitMaliyetIndirim)));
+  if (oyun.fraksiyon.biz.para < birimMaliyet) {
+    await showAlert(`Yetersiz para. Gerekli: ${birimMaliyet} ₺`);
     return;
   }
   const onay = await showConfirm(
-    `${b.ad} bölgesine ${bilgi.ikon} ${bilgi.ad} al.\nMaliyet: ${bilgi.maliyet} ₺\nKapasite: +${bilgi.kapasite}\nİpucu: Shift + Onay = 5 adet`,
+    `${b.ad} bölgesine ${bilgi.ikon} ${bilgi.ad} al.\nMaliyet: ${birimMaliyet} ₺\nKapasite: +${bilgi.kapasite}\nİpucu: Shift + Onay = 5 adet`,
     "Taşıt Satın Al",
     { ekButonEtiketi: "Miktar Gir", ekButonDegeri: "miktar" }
   );
@@ -1606,7 +1721,7 @@ export async function tasitSatinAl(tip) {
     }
     adet = parsed;
   }
-  const toplamMaliyet = bilgi.maliyet * adet;
+  const toplamMaliyet = birimMaliyet * adet;
   if (oyun.fraksiyon.biz.para < toplamMaliyet) {
     await showAlert(`Yetersiz para. ${adet} adet için gerekli: ${toplamMaliyet} ₺`);
     return;
@@ -1615,15 +1730,16 @@ export async function tasitSatinAl(tip) {
   const toplamPersonel = bizToplamPersonel();
   const mevcutKapasite = ownerToplamTasitKapasite("biz");
   const yeniKapasite = adet * bilgi.kapasite;
+  const tasitTavanBonus = Math.max(0, Math.round(arastirmaEfekt("tasitTavanBonus")));
   const tasitKapasiteUstSinir = Math.max(
     20,
-    Math.round(toplamPersonel * 1.1 + oyun.bolgeler.filter((x) => x.owner === "biz").length * 10)
+    Math.round(toplamPersonel * 1.1 + oyun.bolgeler.filter((x) => x.owner === "biz").length * 10 + tasitTavanBonus)
   );
   if ((mevcutKapasite + yeniKapasite) > tasitKapasiteUstSinir) {
     await showAlert(
       `Taşıt alımı sınırı aşılıyor.\nMevcut kapasite: ${mevcutKapasite}\n` +
       `Yeni kapasite: ${mevcutKapasite + yeniKapasite}\n` +
-      `Üst sınır: ${tasitKapasiteUstSinir}\n` +
+      `Üst sınır: ${tasitKapasiteUstSinir}${tasitTavanBonus > 0 ? ` (Araştırma bonusu +${tasitTavanBonus})` : ""}\n` +
       `Daha fazla personel olmadan filo büyütmek maliyeti patlatır.`
     );
     return;
@@ -1663,8 +1779,10 @@ export async function tasitCal(tip) {
   const stokVar = (hedefTasit[tip] || 0) > 0;
   const guvenlik = (hedef.guv || 0) + (hedef.yGuv || 0);
   const as = asayisDurumu();
+  const hirsizlikBonus = sinirla(arastirmaEfekt("tasitHirsizlikBonus"), 0, 0.25);
   let sans = (tip === "motor" ? 0.62 : 0.52) - guvenlik * 0.035 - as.polisBaski * 0.005;
   sans += stokVar ? 0.1 : -0.12;
+  sans += hirsizlikBonus;
   sans = sinirla(sans, 0.08, 0.82);
 
   const onay = await showConfirm(
@@ -1705,12 +1823,15 @@ export function asayisTick() {
   as.polisBaski = sinirla(Math.max(0, as.polisBaski - 0.8) + as.sucluluk * 0.03, 0, 100);
   if (as.sucluluk < 12) return;
 
-  const risk = sinirla(0.02 + as.polisBaski * 0.003 + Math.max(0, as.sucluluk - 25) * 0.004, 0, 0.65);
+  const baskinRiskAzalt = sinirla(arastirmaEfekt("polisBaskinRiskAzaltma"), 0, 0.75);
+  let risk = sinirla(0.02 + as.polisBaski * 0.003 + Math.max(0, as.sucluluk - 25) * 0.004, 0, 0.65);
+  risk = sinirla(risk * (1 - baskinRiskAzalt), 0, 0.65);
   if (Math.random() >= risk) return;
 
+  const polisKoruma = sinirla(arastirmaEfekt("polisKorumaBonus"), 0, 0.6);
   const paraCeza = Math.min(
     oyun.fraksiyon.biz.para,
-    Math.round(100 + as.sucluluk * 4 + Math.random() * 140)
+    Math.round((100 + as.sucluluk * 4 + Math.random() * 140) * (1 - polisKoruma * 0.5))
   );
   oyun.fraksiyon.biz.para -= paraCeza;
 
@@ -1752,8 +1873,9 @@ export async function casuslukOperasyon(hedefId, operasyon) {
       ? `${hedefFr.lider.ikon} `
       : "";
     const liderAd = hedefFr?.lider ? `${liderIkon}${hedefFr.lider.ad}` : "lider";
+    const maliyet = suikastMaliyeti("biz");
     const onay = await showConfirm(
-      `${hedef.ad} bölgesindeki ${liderAd} için suikast emri.\nMaliyet: 300 ₺ + 2 ekip + 4 kişilik taşıt kapasitesi.\nBaşarılı olursa ekip/taşıt geri döner.\nDevam?`,
+      `${hedef.ad} bölgesindeki ${liderAd} için suikast emri.\nMaliyet: ${maliyet} ₺ + 2 ekip + 4 kişilik taşıt kapasitesi.\nBaşarılı olursa ekip/taşıt geri döner.\nDevam?`,
       "Suikast Operasyonu"
     );
     if (!onay) return;
@@ -1805,8 +1927,14 @@ export async function diplomasiBarisTeklif(hedefOwner) {
   }
   if (!(await diploAksiyonKilidiKontrol())) return;
   const il = iliskiDurumu("biz", hedefOwner);
+  const savas = savasSkorOzeti("biz", hedefOwner);
+  const savasSatiri = savas
+    ? `\nSavaş skoru: Sen ${Math.round(savas.skor.biz)} | ${oyun.fraksiyon[hedefOwner].ad} ${Math.round(savas.skor[hedefOwner])}` +
+      `\nYorgunluk: Sen ${Math.round(savas.yorgunluk.biz)} | ${oyun.fraksiyon[hedefOwner].ad} ${Math.round(savas.yorgunluk[hedefOwner])}` +
+      `\nBu teklifin kabul olasılığı (tahmini): %${savas.barisTeklifSans.biz}`
+    : "";
   const onay = await showConfirm(
-    `${oyun.fraksiyon[hedefOwner].ad} için barış teklifi gönderilsin mi?\nMevcut ilişki: ${il.ikon} ${il.deger} (${il.etiket})`,
+    `${oyun.fraksiyon[hedefOwner].ad} için barış teklifi gönderilsin mi?\nMevcut ilişki: ${il.ikon} ${il.deger} (${il.etiket})${savasSatiri}`,
     "Barış Teklifi"
   );
   if (!onay) return;
@@ -1846,20 +1974,22 @@ export async function diplomasiIttifakTeklif(hedefOwner) {
     return;
   }
   if (!(await diploAksiyonKilidiKontrol())) return;
-  if (oyun.fraksiyon.biz.para < DIPLOMASI.ITTIFAK_MALIYETI) {
-    await showAlert(`İttifak için en az ${DIPLOMASI.ITTIFAK_MALIYETI}₺ gerekir.`);
+  const ittifakMaliyetIndirim = sinirla(arastirmaEfekt("diplomasiMaliyetIndirim"), 0, 0.4);
+  const ittifakMaliyeti = Math.max(0, Math.round(DIPLOMASI.ITTIFAK_MALIYETI * (1 - ittifakMaliyetIndirim)));
+  if (oyun.fraksiyon.biz.para < ittifakMaliyeti) {
+    await showAlert(`İttifak için en az ${ittifakMaliyeti}₺ gerekir.`);
     return;
   }
   const il = iliskiDurumu("biz", hedefOwner);
   const onay = await showConfirm(
-    `${oyun.fraksiyon[hedefOwner].ad} ile ittifak teklifi gönderilsin mi?\nBaşlangıç maliyeti: ${DIPLOMASI.ITTIFAK_MALIYETI}₺\nMevcut ilişki: ${il.ikon} ${il.deger} (${il.etiket})`,
+    `${oyun.fraksiyon[hedefOwner].ad} ile ittifak teklifi gönderilsin mi?\nBaşlangıç maliyeti: ${ittifakMaliyeti}₺\nMevcut ilişki: ${il.ikon} ${il.deger} (${il.etiket})`,
     "İttifak Teklifi"
   );
   if (!onay) return;
   const sonuc = ittifakTeklifiEt("biz", hedefOwner);
   if (diploAksiyonSayilirMi(sonuc)) diploAksiyonTuket("ittifak", hedefOwner);
   if (sonuc.ok) {
-    oyun.fraksiyon.biz.para -= DIPLOMASI.ITTIFAK_MALIYETI;
+    oyun.fraksiyon.biz.para -= ittifakMaliyeti;
     sesCal("diplo");
   }
   logYaz(`🤝 ${sonuc.mesaj}`);
@@ -1872,17 +2002,11 @@ export async function diplomasiTicaretTeklif(hedefOwner) {
     return;
   }
   if (!(await diploAksiyonKilidiKontrol())) return;
-  const minSermaye = Math.max(0, Math.round(DIPLOMASI.TICARET_MIN_SERMAYE || 0));
-  if ((oyun.fraksiyon.biz?.para || 0) < minSermaye) {
-    await showAlert(`Ticaret için en az ${minSermaye}₺ sermaye gerekir. Mevcut: ${Math.round(oyun.fraksiyon.biz?.para || 0)}₺`);
-    return;
-  }
   const batmaYuzde = Math.round((DIPLOMASI.TICARET_BATMA_SANSI || 0) * 100);
   const batmaMin = Math.round(DIPLOMASI.TICARET_BATMA_MIN_KAYIP || 0);
   const batmaMax = Math.round(DIPLOMASI.TICARET_BATMA_MAX_KAYIP || 0);
   const onay = await showConfirm(
     `${oyun.fraksiyon[hedefOwner].ad} ile ticaret anlaşması teklif edilsin mi?\n` +
-    `Sermaye şartı: iki taraf da min ${minSermaye}₺.\n` +
     `Not: Ticaret aktifken her tur %${batmaYuzde} batma riski var (${batmaMin}-${batmaMax}₺ kayıp).`,
     "Ticaret Teklifi"
   );
@@ -1914,6 +2038,16 @@ export async function diplomasiRusvetVer(hedefOwner) {
     await showAlert("Yetersiz para.");
     return;
   }
+  const il = iliskiDurumu("biz", hedefOwner);
+  const tahminiArtis = rusvetTahminiArtis("biz", hedefOwner, miktar);
+  const tahminiSonDeger = Math.round((Number(il.deger || 0) + Number(tahminiArtis || 0)) * 10) / 10;
+  const onay = await showConfirm(
+    `${oyun.fraksiyon[hedefOwner].ad} için ${miktar}₺ rüşvet/ödeme gönderilsin mi?\n` +
+    `Mevcut ilişki: ${il.ikon} ${il.deger} (${il.etiket})\n` +
+    `Tahmini etki: +${tahminiArtis} ilişki → yaklaşık ${tahminiSonDeger}`,
+    "Rüşvet / Gizli Ödeme"
+  );
+  if (!onay) return;
   const sonuc = rusvetVer("biz", hedefOwner, miktar);
   if (diploAksiyonSayilirMi(sonuc)) diploAksiyonTuket("rusvet", hedefOwner);
   logYaz(`💸 ${sonuc.mesaj}`);
@@ -2002,6 +2136,7 @@ export const callbacklar = {
   koordineliSaldiriBaslat,
   hareketEmriBaslat,
   toplantiNoktasiYap,
+  toplantiNoktalariSifirla,
   toplantiNoktasinaCagir,
   toplantiNoktasinaGonder,
   hizliTransferSeciliBolgeden,

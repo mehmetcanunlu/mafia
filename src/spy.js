@@ -7,15 +7,20 @@ import { arastirmaEfekt } from "./research.js";
 import { sesCal } from "./audio.js";
 import { bolgeTasitAyir, bolgeTasitIadeEt, bolgeTasitKombinasyonu } from "./logistics.js";
 import { diplomasiSuikastSonucu } from "./diplomasi.js";
+import { rastgeleLiderSecimi } from "./liderHavuzu.js";
 
-const SUIKAST_MALIYET = 300; // ₺
+const SUIKAST_MALIYET_TABAN = 300; // ₺
 const SUIKAST_KAPASITE_GEREK = 4;
 const SUIKAST_EKIP_GEREK = 2;
-const KESIF_MALIYET = 100;
+const KESIF_MALIYET_TABAN = 100;
 const KESIF_KAPASITE_GEREK = 2;
 const KESIF_EKIP_GEREK = 1;
-const KESIF_SURE = 6; // tur — keşif bilgisi ne kadar geçerli
+const KESIF_SURE_TABAN = 6; // tur — keşif bilgisi ne kadar geçerli
 const SUIKAST_DEVRE_DISI_TUR = 8; // lider kaç tur devre dışı
+const SUIKAST_CETE_COKUS_SANSI = 0.10;
+const SUIKAST_BOLGE_KAYBI_SANSI = 0.20;
+const SUIKAST_MIN_BASARI = 0.06;
+const SUIKAST_MAX_BASARI = 0.78;
 const TIP_ONCELIK = { genc: 0, tetikci: 1, uzman: 2, agir_silahli: 3 };
 
 function bosEkipToplami(owner, bolgeId) {
@@ -115,6 +120,116 @@ function operasyonKaynakIade(kaynak) {
   ekipIade(kaynak.owner, kaynak.bolgeId, kaynak.ekip || []);
 }
 
+function suikastSonrasiYeniLiderSec(oncekiLiderId = null) {
+  const aktifLiderIdleri = new Set(
+    Object.values(oyun.fraksiyon || {})
+      .map((f) => f?.lider?.id)
+      .filter((id) => Number.isFinite(id))
+      .map((id) => Number(id))
+  );
+  const adaylar = rastgeleLiderSecimi(24);
+  return (
+    adaylar.find((l) => Number(l?.id) !== Number(oncekiLiderId) && !aktifLiderIdleri.has(Number(l?.id))) ||
+    adaylar.find((l) => Number(l?.id) !== Number(oncekiLiderId)) ||
+    adaylar[0] ||
+    null
+  );
+}
+
+function ownerBirimleriSil(owner, bolgeId = null) {
+  oyun.birimler = (oyun.birimler || []).filter((u) => {
+    if (u?.owner !== owner) return true;
+    if (bolgeId === null || bolgeId === undefined) return false;
+    return u.konumId !== bolgeId;
+  });
+}
+
+function suikastBolgeKaybiUygula(hedefOwner, saldiranOwner = "biz") {
+  const ownerBolgeler = (oyun.bolgeler || []).filter((b) => b.owner === hedefOwner);
+  if (!ownerBolgeler.length) return null;
+
+  const sinirAdaylari = ownerBolgeler.filter((b) =>
+    (oyun.komsu?.[b.id] || []).some((kid) => bolgeById(kid)?.owner === saldiranOwner)
+  );
+  const kaynak = (sinirAdaylari.length ? sinirAdaylari : ownerBolgeler)
+    .slice()
+    .sort((a, b) => {
+      const aBirim = (oyun.birimler || [])
+        .filter((u) => u.owner === hedefOwner && u.konumId === a.id)
+        .reduce((t, u) => t + (u.adet || 0), 0);
+      const bBirim = (oyun.birimler || [])
+        .filter((u) => u.owner === hedefOwner && u.konumId === b.id)
+        .reduce((t, u) => t + (u.adet || 0), 0);
+      const aSkor = (a.gelir || 0) * 1.5 + (a.guv || 0) + (a.yGuv || 0) + aBirim * 0.4;
+      const bSkor = (b.gelir || 0) * 1.5 + (b.guv || 0) + (b.yGuv || 0) + bBirim * 0.4;
+      return bSkor - aSkor;
+    })[0];
+  if (!kaynak) return null;
+
+  const devralan = sinirAdaylari.length ? saldiranOwner : "tarafsiz";
+  ownerBirimleriSil(hedefOwner, kaynak.id);
+  kaynak.owner = devralan;
+  kaynak.garnizon = Math.max(2, Math.round((kaynak.garnizon || 4) * 0.5));
+  if (devralan !== "tarafsiz") {
+    yiginaEkle(kaynak.id, devralan, Math.max(3, Math.round(kaynak.garnizon || 3)), "tetikci", { tavanUygula: false });
+  }
+  return { bolgeId: kaynak.id, bolgeAd: kaynak.ad, devralan };
+}
+
+function suikastKomutaDarbeUygula(hedefOwner) {
+  let kayip = 0;
+  (oyun.birimler || []).forEach((u) => {
+    if (u.owner !== hedefOwner) return;
+    const azalma = Math.max(0, Math.round((u.adet || 0) * 0.35));
+    if (azalma <= 0) return;
+    u.adet -= azalma;
+    kayip += azalma;
+    if (u.adet <= 0) u._sil = true;
+  });
+  oyun.birimler = (oyun.birimler || []).filter((u) => !u._sil && (u.adet || 0) > 0);
+  const fr = oyun.fraksiyon?.[hedefOwner];
+  const paraKaybi = fr ? Math.min(fr.para || 0, Math.max(80, Math.round((fr.para || 0) * 0.2))) : 0;
+  if (fr) {
+    fr.para = Math.max(0, (fr.para || 0) - paraKaybi);
+    fr.havuz = Math.max(0, (fr.havuz || 0) - 6);
+  }
+  return { kayip, paraKaybi };
+}
+
+function suikastCeteCokusUygula(hedefOwner) {
+  const ownerBolgeler = (oyun.bolgeler || []).filter((b) => b.owner === hedefOwner);
+  ownerBolgeler.forEach((b) => {
+    b.owner = "tarafsiz";
+    b.garnizon = Math.max(3, Math.round((b.nufus || b.nufusMax || 70) / 28));
+  });
+  ownerBirimleriSil(hedefOwner);
+  const fr = oyun.fraksiyon?.[hedefOwner];
+  if (fr) {
+    fr.para = 0;
+    fr.havuz = 0;
+    fr.tasit = { araba: 0, motor: 0 };
+  }
+  return { bolgeKaybi: ownerBolgeler.length };
+}
+
+function operasyonMaliyetCarpani(owner = "biz") {
+  const indirim = Math.max(0, Math.min(0.6, arastirmaEfekt("operasyonMaliyetIndirim")));
+  return owner === "biz" ? (1 - indirim) : 1;
+}
+
+export function kesifMaliyeti(owner = "biz") {
+  return Math.max(20, Math.round(KESIF_MALIYET_TABAN * operasyonMaliyetCarpani(owner)));
+}
+
+export function suikastMaliyeti(owner = "biz") {
+  return Math.max(60, Math.round(SUIKAST_MALIYET_TABAN * operasyonMaliyetCarpani(owner)));
+}
+
+export function kesifSuresi(owner = "biz") {
+  const bonus = owner === "biz" ? Math.max(0, Math.round(arastirmaEfekt("kesifSureBonus"))) : 0;
+  return Math.max(2, KESIF_SURE_TABAN + bonus);
+}
+
 export function operasyonMumkunMu(hedefBolgeId, operasyon) {
   const kapasite = operasyon === "suikast" ? SUIKAST_KAPASITE_GEREK : KESIF_KAPASITE_GEREK;
   const ekip = operasyon === "suikast" ? SUIKAST_EKIP_GEREK : KESIF_EKIP_GEREK;
@@ -130,21 +245,23 @@ export function kesifYap(hedefBolgeId) {
   if (!hedef) return { basarili: false, mesaj: "Geçersiz hedef." };
   if (hedef.owner === "biz") return { basarili: false, mesaj: "Kendi bölgeni keşifleyemezsin." };
 
-  if (oyun.fraksiyon.biz.para < KESIF_MALIYET) {
-    return { basarili: false, mesaj: `Yetersiz para. Gerekli: ${KESIF_MALIYET} ₺` };
+  const maliyet = kesifMaliyeti("biz");
+  if (oyun.fraksiyon.biz.para < maliyet) {
+    return { basarili: false, mesaj: `Yetersiz para. Gerekli: ${maliyet} ₺` };
   }
   const kaynak = operasyonKaynakAyir("biz", KESIF_KAPASITE_GEREK, KESIF_EKIP_GEREK, hedefBolgeId);
   if (!kaynak) {
     return { basarili: false, mesaj: `En az ${KESIF_EKIP_GEREK} ekip ve ${KESIF_KAPASITE_GEREK} kişilik taşıt kapasitesi gerekli.` };
   }
 
-  oyun.fraksiyon.biz.para -= KESIF_MALIYET;
+  oyun.fraksiyon.biz.para -= maliyet;
 
   const basariSansi = Math.min(0.95, 0.75 + arastirmaEfekt("kesifBonus"));
   const basarili = Math.random() < basariSansi;
+  const sure = kesifSuresi("biz");
 
   if (basarili) {
-    hedef._kesif = { bitis: oyun.tur + KESIF_SURE };
+    hedef._kesif = { bitis: oyun.tur + sure };
     const garnizon = oyun.birimler
       .filter((b) => b.konumId === hedefBolgeId && b.owner === hedef.owner)
       .reduce((t, b) => t + b.adet, 0);
@@ -153,7 +270,7 @@ export function kesifYap(hedefBolgeId) {
       `🔍 ${hedef.ad} keşfedildi! Garnizon: ${garnizon}, Güvenlik: ${hedef.guv + hedef.yGuv}, Gelir: ${hedef.gelir} ₺/tur`
     );
     sesCal("kesif");
-    showToast(`🔍 ${hedef.ad} keşfedildi! Bilgiler ${KESIF_SURE} tur geçerli.`, "bilgi", 4000);
+    showToast(`🔍 ${hedef.ad} keşfedildi! Bilgiler ${sure} tur geçerli.`, "bilgi", 4000);
     operasyonKaynakIade(kaynak);
     return {
       basarili: true,
@@ -185,34 +302,67 @@ export function suikastYap(hedefBolgeId) {
     return { basarili: false, mesaj: `${hedefFr.lider.ad} zaten devre dışı (${hedefFr._liderDevreDisi - oyun.tur} tur kaldı).` };
   }
 
-  if (oyun.fraksiyon.biz.para < SUIKAST_MALIYET) {
-    return { basarili: false, mesaj: `Yetersiz para. Gerekli: ${SUIKAST_MALIYET} ₺` };
+  const maliyet = suikastMaliyeti("biz");
+  if (oyun.fraksiyon.biz.para < maliyet) {
+    return { basarili: false, mesaj: `Yetersiz para. Gerekli: ${maliyet} ₺` };
   }
   const kaynak = operasyonKaynakAyir("biz", SUIKAST_KAPASITE_GEREK, SUIKAST_EKIP_GEREK, hedefBolgeId);
   if (!kaynak) {
     return { basarili: false, mesaj: `En az ${SUIKAST_EKIP_GEREK} ekip ve ${SUIKAST_KAPASITE_GEREK} kişilik taşıt kapasitesi gerekli.` };
   }
 
-  oyun.fraksiyon.biz.para -= SUIKAST_MALIYET;
+  oyun.fraksiyon.biz.para -= maliyet;
 
-  // Başarı şansı: düşman güvenliğine ve istihbarat araştırmasına göre
-  const guvPenalti = (hedef.guv + hedef.yGuv) * 0.04;
+  // Başarı şansı zorlaştırıldı: güvenlik daha sert etkiler, keşif varsa sınırlı bonus verir.
+  const guvPenalti = (hedef.guv + hedef.yGuv) * 0.05;
+  const kesifBonus = kesifAktifMi(hedefBolgeId) ? 0.08 : 0;
   const basariSansi = Math.max(
-    0.10,
-    Math.min(0.95, 0.50 + arastirmaEfekt("suikastBonus") - guvPenalti)
+    SUIKAST_MIN_BASARI,
+    Math.min(SUIKAST_MAX_BASARI, 0.34 + arastirmaEfekt("suikastBonus") + kesifBonus - guvPenalti)
   );
   const basarili = Math.random() < basariSansi;
 
   const liderAd = hedefFr.lider.ad;
 
   if (basarili) {
-    hedefFr._liderDevreDisi = oyun.tur + SUIKAST_DEVRE_DISI_TUR;
+    const oncekiLiderId = hedefFr.lider?.id || null;
+    const yeniLider = suikastSonrasiYeniLiderSec(oncekiLiderId);
+    if (yeniLider) hedefFr.lider = yeniLider;
+    delete hedefFr._liderDevreDisi;
+    hedefFr._ofke = (hedefFr._ofke || 0) + 30;
+
+    const kriz = Math.random();
+    let krizMesaj = "";
+    let toastMesaj = `🗡️ ${liderAd} etkisiz hale getirildi.`;
+    if (kriz < SUIKAST_CETE_COKUS_SANSI) {
+      const cokme = suikastCeteCokusUygula(hedef.owner);
+      krizMesaj = `${hedefFr.ad} suikast sonrası iç savaşla çöktü (${cokme.bolgeKaybi} bölge dağıldı).`;
+      toastMesaj = `💀 ${hedefFr.ad} çöktü!`;
+    } else if (kriz < (SUIKAST_CETE_COKUS_SANSI + SUIKAST_BOLGE_KAYBI_SANSI)) {
+      const bolgeKaybi = suikastBolgeKaybiUygula(hedef.owner, "biz");
+      if (bolgeKaybi) {
+        krizMesaj = `${hedefFr.ad} kriz yaşadı ve ${bolgeKaybi.bolgeAd} kontrolünü ${
+          bolgeKaybi.devralan === "biz" ? "bize" : "tarafsızlara"
+        } kaybetti.`;
+        toastMesaj = `🏴 ${bolgeKaybi.bolgeAd} el değiştirdi!`;
+      }
+    } else {
+      const darbe = suikastKomutaDarbeUygula(hedef.owner);
+      krizMesaj = `${hedefFr.ad} komuta zinciri sarsıldı (yaklaşık ${darbe.kayip} birlik dağıldı, ${darbe.paraKaybi}₺ kayıp).`;
+      toastMesaj = `⚠️ ${hedefFr.ad} komuta darbesi yedi.`;
+    }
+
     diplomasiSuikastSonucu("biz", hedef.owner, true);
-    logYaz(`🗡️ Suikast başarılı! "${liderAd}" ${SUIKAST_DEVRE_DISI_TUR} tur devre dışı.`);
+    const yeniLiderAd = hedefFr.lider?.ad || "Yeni lider";
+    logYaz(`🗡️ Suikast başarılı! "${liderAd}" etkisiz. ${hedefFr.ad} yeni lideri: "${yeniLiderAd}".`);
+    if (krizMesaj) logYaz(`💥 ${krizMesaj}`);
     sesCal("suikast");
-    showToast(`🗡️ ${liderAd} devre dışı! (${SUIKAST_DEVRE_DISI_TUR} tur)`, "basari", 5000);
+    showToast(toastMesaj, "basari", 5200);
     operasyonKaynakIade(kaynak);
-    return { basarili: true, mesaj: `${liderAd} devre dışı bırakıldı.` };
+    return {
+      basarili: true,
+      mesaj: `${liderAd} etkisiz. ${hedefFr.ad} yeni lider: ${yeniLiderAd}.${krizMesaj ? ` ${krizMesaj}` : ""}`,
+    };
   } else {
     // Başarısız: hedef öfkeli, saldırma ihtimali artar
     hedefFr._ofke = (hedefFr._ofke || 0) + 20;

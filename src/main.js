@@ -45,6 +45,7 @@ import {
   diplomasiTick,
   diplomasiSaldiriMumkunMu,
   diplomasiFetihSonucu,
+  diplomasiSavasCatismasiSonucu,
   ittifakSaldiriCarpani,
   savasIliskiModifiyeri,
   isDostCete,
@@ -85,7 +86,7 @@ function diploPopupKuyrugaEkle(olay) {
     if (typeof olay === "object" && olay.teklifId) {
       const kabul = await showConfirm(metin, baslik);
       const sonuc = diplomasiTeklifYanitla(olay.teklifId, !!kabul);
-      if (sonuc?.mesaj && /(ittifak|koalisyon|m[üu]dahale|savaş)/i.test(sonuc.mesaj)) {
+      if (sonuc?.mesaj && /(ittifak|koalisyon|m[üu]dahale|savaş|barış|ateskes|ticaret)/i.test(sonuc.mesaj)) {
         logYaz(`🤝 ${sonuc.mesaj}`);
       }
       uiGuncel(callbacklar);
@@ -111,6 +112,96 @@ function ownerEtiketi(owner) {
   const ownerler = ownerListesi(owner);
   if (!ownerler.length) return "-";
   return ownerler.map((id) => oyun.fraksiyon[id]?.ad || id).join(" + ");
+}
+
+const AI_OWNERLER = Object.freeze(["ai1", "ai2", "ai3"]);
+
+function ownerBolgeSayisi(owner) {
+  return (oyun.bolgeler || []).filter((b) => b.owner === owner).length;
+}
+
+function ownerAktifMi(owner) {
+  if (!owner || owner === "tarafsiz") return false;
+  const fr = oyun.fraksiyon?.[owner];
+  if (!fr || fr._elendi) return false;
+  return ownerBolgeSayisi(owner) > 0;
+}
+
+function iliskiAnahtarOwnerIcerirMi(key, owner) {
+  if (!key || !owner) return false;
+  const taraflar = String(key).split("-");
+  return taraflar.includes(owner);
+}
+
+function ownerElimineEt(owner) {
+  if (!owner || owner === "biz" || owner === "tarafsiz") return false;
+  const fr = oyun.fraksiyon?.[owner];
+  if (!fr || fr._elendi) return false;
+
+  fr._elendi = true;
+  fr.para = 0;
+  fr.havuz = 0;
+  fr.tasit = { araba: 0, motor: 0 };
+  if (oyun.toplantiNoktasi && Object.prototype.hasOwnProperty.call(oyun.toplantiNoktasi, owner)) {
+    oyun.toplantiNoktasi[owner] = [];
+  }
+
+  if (Array.isArray(oyun.operasyonlar)) {
+    oyun.operasyonlar.forEach((op) => {
+      const ownerVar = Array.isArray(op?.katilimcilar) &&
+        op.katilimcilar.some((kat) => kat?.owner === owner);
+      if (!ownerVar) return;
+      if (op.durum === "hazirlik" || op.durum === "saldirim") {
+        operasyonSerbestBirak(op, "iptal", `☠️ ${fr.ad} dağıldığı için koordineli operasyon iptal edildi.`);
+      }
+    });
+  }
+
+  oyun.birimler = (oyun.birimler || []).filter((u) => u?.owner !== owner);
+  oyun.yaralilar = (oyun.yaralilar || []).filter((y) => y?.owner !== owner);
+  oyun.esirler = (oyun.esirler || []).filter((e) => e?.owner !== owner && e?.tutulan !== owner);
+  oyun.operasyonlar = (oyun.operasyonlar || []).filter((op) => {
+    if (!Array.isArray(op?.katilimcilar)) return true;
+    return !op.katilimcilar.some((kat) => kat?.owner === owner);
+  });
+
+  const d = oyun.diplomasi;
+  if (d && typeof d === "object") {
+    if (Array.isArray(d.anlasmalar)) {
+      d.anlasmalar = d.anlasmalar.filter((a) => a?.taraf1 !== owner && a?.taraf2 !== owner);
+    }
+    if (Array.isArray(d.bekleyenTeklifler)) {
+      d.bekleyenTeklifler = d.bekleyenTeklifler.filter((t) => t?.gonderen !== owner && t?.hedef !== owner);
+    }
+    if (Array.isArray(d.ittifakMudahaleKuyrugu)) {
+      d.ittifakMudahaleKuyrugu = d.ittifakMudahaleKuyrugu.filter(
+        (m) => m?.owner !== owner && m?.saldiran !== owner && m?.savunulan !== owner
+      );
+    }
+    if (d.iliskiler && typeof d.iliskiler === "object") {
+      Object.keys(d.iliskiler).forEach((key) => {
+        if (iliskiAnahtarOwnerIcerirMi(key, owner)) delete d.iliskiler[key];
+      });
+    }
+    if (d.savasDurumu && typeof d.savasDurumu === "object") {
+      Object.keys(d.savasDurumu).forEach((key) => {
+        if (iliskiAnahtarOwnerIcerirMi(key, owner)) delete d.savasDurumu[key];
+      });
+    }
+    if (d.kritikBildirim?.savasDurumu && typeof d.kritikBildirim.savasDurumu === "object") {
+      delete d.kritikBildirim.savasDurumu[owner];
+    }
+  }
+
+  logYaz(`☠️ ${fr.ad} tamamen dağıldı ve oyundan elendi.`);
+  return true;
+}
+
+function ownerEliminasyonTick() {
+  AI_OWNERLER.forEach((owner) => {
+    if (ownerAktifMi(owner)) return;
+    ownerElimineEt(owner);
+  });
 }
 
 function tamSayiPozitif(deger) {
@@ -509,6 +600,13 @@ function koordineliSavasCoz(grup, hedef) {
       savunanKalan: defKalan,
       yeniOwner: hedef.owner,
     });
+    diplomasiSavasCatismasiSonucu(captureOwner, oncekiOwner, {
+      saldiranKayip: atkKayipToplam,
+      savunanKayip: Math.max(0, savunanToplam - defKalan),
+      saldiriBasarili: true,
+      fetih: true,
+      bolgeId: hedef.id,
+    });
     return;
   }
 
@@ -552,6 +650,13 @@ function koordineliSavasCoz(grup, hedef) {
     savunanKayip: defKayipUygulandi,
     savunanKalan: savunma.toplamAdet - defKayipUygulandi,
     yeniOwner: hedef.owner,
+  });
+  diplomasiSavasCatismasiSonucu(grup[0].owner, oncekiOwner, {
+    saldiranKayip: atkKayipToplam,
+    savunanKayip: defKayipUygulandi,
+    saldiriBasarili: false,
+    fetih: false,
+    bolgeId: hedef.id,
   });
 }
 
@@ -789,6 +894,13 @@ function hareketTick() {
         savunanKalan: defKalan,
         yeniOwner: hedef.owner,
       });
+      diplomasiSavasCatismasiSonucu(k.owner, oncekiOwner, {
+        saldiranKayip: atkKayip,
+        savunanKayip: Math.max(0, savunanToplam - defKalan),
+        saldiriBasarili: true,
+        fetih: true,
+        bolgeId: hedef.id,
+      });
     } else {
       // saldırı başarısız
       const atkKayipOran = Math.max(0.2, (0.45 + Math.random() * 0.2) - kayipAzaltma);
@@ -835,6 +947,13 @@ function hareketTick() {
         savunanKayip: defKayipUygulandi,
         savunanKalan: savunma.toplamAdet - defKayipUygulandi,
         yeniOwner: hedef.owner,
+      });
+      diplomasiSavasCatismasiSonucu(k.owner, hedef.owner, {
+        saldiranKayip: atkKayip,
+        savunanKayip: defKayipUygulandi,
+        saldiriBasarili: false,
+        fetih: false,
+        bolgeId: hedef.id,
       });
     }
 
@@ -1062,34 +1181,49 @@ function haracGeliriHesapla(bizBolgeler, harac) {
     const yatirimCarpani = 1 + (b.yGel || 0) * EKONOMI_DENGE.haracYatirimBonus;
     return toplam + (gelirTabani + nufusKatkisi) * yatirimCarpani;
   }, 0);
-  return Math.max(0, Math.round(taban * (harac?.gelirCarpani || 1)));
+  const arastirmaHaracBonus = Math.max(0, arastirmaEfekt("haracGelirBonus"));
+  return Math.max(0, Math.round(taban * (harac?.gelirCarpani || 1) * (1 + arastirmaHaracBonus)));
 }
 
 function oyuncuHaracTick(bizBolgeler) {
   const eco = ekonomiDurumu();
   const harac = aktifHaracProfili();
   const as = asayisDurumuMain();
+  const haracSadakatKoruma = Math.min(0.8, Math.max(0, arastirmaEfekt("haracSadakatCezaAzaltma")));
+  const haracPolisKoruma = Math.min(0.8, Math.max(0, arastirmaEfekt("haracPolisArtisAzaltma")));
+  const suclulukAzaltim = Math.min(0.7, Math.max(0, arastirmaEfekt("suclulukArtisAzaltma")));
+  const sadakatDelta =
+    harac.sadakatDelta < 0 ? harac.sadakatDelta * (1 - haracSadakatKoruma) : harac.sadakatDelta;
+  const suclulukDelta =
+    harac.suclulukDelta > 0 ? harac.suclulukDelta * (1 - suclulukAzaltim) : harac.suclulukDelta;
+  const polisDelta =
+    harac.polisDelta > 0 ? harac.polisDelta * (1 - haracPolisKoruma) : harac.polisDelta;
   const gelir = haracGeliriHesapla(bizBolgeler, harac);
   eco.sonHaracGeliri = gelir;
   eco.alimBuTur = 0;
   if (gelir > 0) oyun.fraksiyon.biz.para += gelir;
 
-  if (harac.sadakatDelta !== 0) {
+  if (sadakatDelta !== 0) {
     bizBolgeler.forEach((b) => {
       const mevcut = Number(b.sadakat) || 55;
-      b.sadakat = Math.max(0, Math.min(100, mevcut + harac.sadakatDelta));
+      b.sadakat = Math.max(0, Math.min(100, mevcut + sadakatDelta));
     });
   }
 
-  as.sucluluk = Math.max(0, Math.min(200, (as.sucluluk || 0) + harac.suclulukDelta));
-  as.polisBaski = Math.max(0, Math.min(100, (as.polisBaski || 0) + harac.polisDelta));
+  as.sucluluk = Math.max(0, Math.min(200, (as.sucluluk || 0) + suclulukDelta));
+  as.polisBaski = Math.max(0, Math.min(100, (as.polisBaski || 0) + polisDelta));
 
   const ortSad = bizOrtalamaSadakat(bizBolgeler);
   if (eco.haracSeviye === "yuksek" && ortSad < EKONOMI_DENGE.haracKrizSadakatEsigi) {
-    as.polisBaski = Math.max(0, Math.min(100, as.polisBaski + EKONOMI_DENGE.haracKrizPolisEtkisi));
+    const krizPolisEtkisi = EKONOMI_DENGE.haracKrizPolisEtkisi * (1 - haracPolisKoruma);
+    const krizSadakatDarbe =
+      EKONOMI_DENGE.haracKrizSadakatDarbe < 0
+        ? EKONOMI_DENGE.haracKrizSadakatDarbe * (1 - haracSadakatKoruma)
+        : EKONOMI_DENGE.haracKrizSadakatDarbe;
+    as.polisBaski = Math.max(0, Math.min(100, as.polisBaski + krizPolisEtkisi));
     bizBolgeler.forEach((b) => {
       const mevcut = Number(b.sadakat) || 55;
-      b.sadakat = Math.max(0, Math.min(100, mevcut + EKONOMI_DENGE.haracKrizSadakatDarbe));
+      b.sadakat = Math.max(0, Math.min(100, mevcut + krizSadakatDarbe));
     });
   }
 
@@ -1198,7 +1332,8 @@ function yaraliTick() {
 }
 
 function oyuncuBakimTick() {
-  const gider = ownerBakimToplami("biz");
+  const bakimIndirim = Math.min(0.5, Math.max(0, arastirmaEfekt("bakimIndirim")));
+  const gider = ownerBakimToplami("biz") * (1 - bakimIndirim);
   if (gider <= 0) return;
   oyun.fraksiyon.biz.para -= gider;
   if (oyun.fraksiyon.biz.para < 0) {
@@ -1325,6 +1460,7 @@ function kazananVarMi() {
 
 function turIsle() {
   oyun.tur++;
+  ownerEliminasyonTick();
 
   const fin = kazananVarMi();
   if (fin.bitti) {
@@ -1349,31 +1485,22 @@ function turIsle() {
   oyuncuUretimTick();
 
   // AI ekonomi/üretim
-  aiGelisimVeUretim("ai1");
-  aiGelisimVeUretim("ai2");
-  aiGelisimVeUretim("ai3");
+  const aktifAiOwnerler = AI_OWNERLER.filter((owner) => ownerAktifMi(owner));
+  aktifAiOwnerler.forEach((owner) => aiGelisimVeUretim(owner));
 
   // Oyuncu bakım maliyeti
   oyuncuBakimTick();
   ekonomiKpiTick();
 
   // AI araştırma ilerlemesi
-  aiArastirmaTick("ai1");
-  aiArastirmaTick("ai2");
-  aiArastirmaTick("ai3");
+  aktifAiOwnerler.forEach((owner) => aiArastirmaTick(owner));
 
   // AI saldırı/hareket (STACK TABANLI)
-  aiSaldiriHareket("ai1");
-  aiSaldiriHareket("ai2");
-  aiSaldiriHareket("ai3");
-  aiKoordineliSaldiriDegerlendirYap("ai1");
-  aiKoordineliSaldiriDegerlendirYap("ai2");
-  aiKoordineliSaldiriDegerlendirYap("ai3");
+  aktifAiOwnerler.forEach((owner) => aiSaldiriHareket(owner));
+  aktifAiOwnerler.forEach((owner) => aiKoordineliSaldiriDegerlendirYap(owner));
 
   // AI casusluk
-  aiCasuslukYap("ai1");
-  aiCasuslukYap("ai2");
-  aiCasuslukYap("ai3");
+  aktifAiOwnerler.forEach((owner) => aiCasuslukYap(owner));
 
   // Diplomasi turu
   const diploMesajlar = diplomasiTick();
@@ -1431,6 +1558,7 @@ function turIsle() {
   // birliklerin varışı & savaş
   operasyonTick();
   hareketTick();
+  ownerEliminasyonTick();
   motorluHizTick();   // Eski mekanik: no-op (geriye dönük uyumluluk)
   // kritik: pause butonu handler'ı düşmesin diye tam UI yenile
   uiGuncel(callbacklar);
