@@ -122,6 +122,53 @@ export function showPrompt(mesaj, baslik = 'Giriş', varsayilan = '') {
   });
 }
 
+export function showRangePrompt(secenekler = {}) {
+  const min = Math.max(0, Number(secenekler.min ?? 0));
+  const max = Math.max(min, Number(secenekler.max ?? min));
+  const step = Math.max(1, Number(secenekler.step ?? 1));
+  const baslik = secenekler.baslik || "Seçim";
+  const mesaj = secenekler.mesaj || "";
+  const birim = secenekler.birim || "";
+  const varsayilan = Math.min(max, Math.max(min, Number(secenekler.varsayilan ?? max)));
+  const baslangicDeger = Math.round(varsayilan);
+
+  return showModal({
+    html: `
+      <div class="cm-baslik">${baslik}</div>
+      <div class="cm-icerik">${mesaj}</div>
+      <div style="margin:8px 0 10px 0">
+        <input class="cm-range" type="range" min="${min}" max="${max}" step="${step}" value="${baslangicDeger}" style="width:100%" />
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:12px;color:#93a8bd">
+          <span>Min: ${min}</span>
+          <strong class="cm-range-deger" style="font-size:14px;color:#f5c542">${baslangicDeger}${birim ? ` ${birim}` : ""}</strong>
+          <span>Maks: ${max}</span>
+        </div>
+      </div>
+      <div class="cm-butonlar">
+        <button class="buton grimsi cm-iptal">İptal</button>
+        <button class="buton cm-tamam">Onayla</button>
+      </div>`,
+    escValue: null,
+    bagla(kutu, kapat) {
+      const range = kutu.querySelector('.cm-range');
+      const deger = kutu.querySelector('.cm-range-deger');
+      const degerMetni = (v) => `${v}${birim ? ` ${birim}` : ""}`;
+      const guncelle = () => {
+        const v = parseInt(range.value, 10) || min;
+        deger.textContent = degerMetni(v);
+      };
+      guncelle();
+      range.addEventListener('input', guncelle);
+      setTimeout(() => range.focus(), 50);
+      kutu.querySelector('.cm-tamam').onclick = () => kapat(parseInt(range.value, 10) || min);
+      kutu.querySelector('.cm-iptal').onclick = () => kapat(null);
+      range.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') kapat(parseInt(range.value, 10) || min);
+      });
+    }
+  });
+}
+
 export function showToast(mesaj, tip = 'bilgi', sure = 4000) {
   ensureContainers();
   const kap = document.getElementById('toast-kap');

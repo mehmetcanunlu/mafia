@@ -752,7 +752,13 @@ function istanbulEtkilesimBagla(svgKap, svg, onBolgeSec) {
     const bolgeId = hedefPath?.getAttribute("data-id");
     if (!bolgeId) return;
     e.preventDefault();
-    haritaContextMenuAc(e.clientX, e.clientY, bolgeId, onBolgeSec);
+    if (e.shiftKey) {
+      haritaContextMenuAc(e.clientX, e.clientY, bolgeId, onBolgeSec);
+      return;
+    }
+    if (typeof onBolgeSec === "function") {
+      onBolgeSec(bolgeId, { contextmenu: true, kaynak: "contextmenu" });
+    }
   });
 }
 
@@ -2001,7 +2007,7 @@ function profilIliskiDurumHTML(owner) {
 function profilPanelIcerikHTML(bolgeId = oyun.seciliId) {
   const secili = bolgeById(bolgeId);
   if (!secili || secili.owner === "tarafsiz") {
-    return `<h3>👤 Bölge Profili</h3><p class="ipucu">Sahipli bir bölge seçip aynı bölgeye ikinci kez tıkla; lider profili solda açılır.</p>`;
+    return `<h3>👤 Bölge Profili</h3><p class="ipucu">Sahipli bir bölgeye sağ tıklayarak profil/özelleştirme panelini açabilirsin.</p>`;
   }
 
   const owner = secili.owner;
@@ -2498,7 +2504,11 @@ export function haritaCiz(onBolgeSec) {
     };
     k.oncontextmenu = (e) => {
       e.preventDefault();
-      haritaContextMenuAc(e.clientX, e.clientY, b.id, onBolgeSec);
+      if (e.shiftKey) {
+        haritaContextMenuAc(e.clientX, e.clientY, b.id, onBolgeSec);
+        return;
+      }
+      onBolgeSec(b.id, { contextmenu: true, kaynak: "grid-contextmenu" });
     };
     h.appendChild(k);
   });
@@ -2701,7 +2711,7 @@ export function detayCiz() {
       <p>Haritadan bir bölge seçerek detay açabilirsin.</p>
       <p><strong>Çete:</strong> ${htmlEsc(biz?.ad || "Biz")}</p>
       <p><strong>Bölge:</strong> ${bizBolge} • <strong>Birim:</strong> ${bizBirim} • <strong>Para:</strong> ${Math.round(biz?.para || 0)} ₺</p>
-      <p class="ipucu">Sahipli bir bölgeye ikinci kez tıkladığında solda o bölgenin lider profili açılır.</p>
+      <p class="ipucu">Sahipli bir bölgeye sağ tıkla: solda lider profili/özelleştirme açılır. Kendi bölgene ikinci tık: hareket için birlik seçimi.</p>
     `;
     return;
   }
