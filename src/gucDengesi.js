@@ -33,7 +33,7 @@ export function gucSiralamasiHesapla() {
   const liste = OWNERLER.map((owner) => ({
     owner,
     puan: gucPuani(owner),
-  })).sort((a, b) => b.puan - a.puan);
+  })).sort((a, b) => b.puan - a.puan || String(a.owner).localeCompare(String(b.owner)));
   const toplam = liste.reduce((t, s) => t + s.puan, 0) || 1;
   return liste.map((s, sira) => ({
     ...s,
