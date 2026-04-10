@@ -32,13 +32,242 @@ function ownerPara(owner) {
   return Math.max(0, Math.round(oyun.fraksiyon?.[owner]?.para || 0));
 }
 
+function ownerOyundaMi(owner) {
+  if (!owner || owner === "tarafsiz") return false;
+  const fr = oyun.fraksiyon?.[owner];
+  if (!fr || fr._elendi) return false;
+  return (oyun.bolgeler || []).some((b) => b.owner === owner);
+}
+
+function savasDurumuTablosu() {
+  const d = diplomasiDurumu();
+  if (!d.savasDurumu || typeof d.savasDurumu !== "object") d.savasDurumu = {};
+  return d.savasDurumu;
+}
+
+function savasKayitTablosu() {
+  const d = diplomasiDurumu();
+  if (!d.savasKayit || typeof d.savasKayit !== "object") d.savasKayit = {};
+  return d.savasKayit;
+}
+
+export function savastaMi(a, b) {
+  if (!a || !b || a === b) return false;
+  const tablo = savasDurumuTablosu();
+  return !!tablo[iliskiAnahtar(a, b)];
+}
+
+function ownerBolgeSayisiDiplo(owner) {
+  if (!owner) return 0;
+  return (oyun.bolgeler || []).filter((x) => x.owner === owner).length;
+}
+
+function savasKaydiBaslat(a, b, meta = {}) {
+  if (!a || !b || a === b) return null;
+  const tablo = savasKayitTablosu();
+  const key = iliskiAnahtar(a, b);
+  if (!tablo[key] || typeof tablo[key] !== "object") {
+    const taraflar = key.split("-");
+    const taraf1 = taraflar[0] || a;
+    const taraf2 = taraflar[1] || b;
+    tablo[key] = {
+      taraflar: [taraf1, taraf2],
+      ilanEden: meta.ilanEden || a,
+      baslangicTur: oyun.tur,
+      sonCatismaTur: oyun.tur,
+      skor: {
+        [taraf1]: 0,
+        [taraf2]: 0,
+      },
+      yorgunluk: {
+        [taraf1]: 0,
+        [taraf2]: 0,
+      },
+      baslangicBolge: {
+        [taraf1]: ownerBolgeSayisiDiplo(taraf1),
+        [taraf2]: ownerBolgeSayisiDiplo(taraf2),
+      },
+      baslangicGuc: {
+        [taraf1]: Math.max(1, gucPuani(taraf1)),
+        [taraf2]: Math.max(1, gucPuani(taraf2)),
+      },
+    };
+  }
+  const kayit = tablo[key];
+  if (!kayit.skor || typeof kayit.skor !== "object") kayit.skor = { [a]: 0, [b]: 0 };
+  if (!kayit.yorgunluk || typeof kayit.yorgunluk !== "object") kayit.yorgunluk = { [a]: 0, [b]: 0 };
+  if (!kayit.baslangicBolge || typeof kayit.baslangicBolge !== "object") {
+    kayit.baslangicBolge = { [a]: ownerBolgeSayisiDiplo(a), [b]: ownerBolgeSayisiDiplo(b) };
+  }
+  if (!kayit.baslangicGuc || typeof kayit.baslangicGuc !== "object") {
+    kayit.baslangicGuc = { [a]: Math.max(1, gucPuani(a)), [b]: Math.max(1, gucPuani(b)) };
+  }
+  if (!Number.isFinite(kayit.sonCatismaTur)) kayit.sonCatismaTur = oyun.tur;
+  return kayit;
+}
+
+function savasKaydiGetir(a, b, olustur = false, meta = {}) {
+  if (!a || !b || a === b) return null;
+  if (olustur) return savasKaydiBaslat(a, b, meta);
+  const tablo = savasKayitTablosu();
+  const key = iliskiAnahtar(a, b);
+  const kayit = tablo[key];
+  if (!kayit || typeof kayit !== "object") return null;
+  return savasKaydiBaslat(a, b, meta);
+}
+
+function savasSkorLimit(v) {
+  const ust = Math.max(40, Number(DIPLOMASI.SAVAS_SKOR_UST_LIMIT || 100));
+  return clamp(round1(v), -ust, ust);
+}
+
+function savasSkorDegeri(owner, hedef) {
+  const kayit = savasKaydiGetir(owner, hedef);
+  if (!kayit) return 0;
+  const deger = Number(kayit.skor?.[owner] || 0);
+  return savasSkorLimit(Number.isFinite(deger) ? deger : 0);
+}
+
+function savasYorgunlukDegeri(owner, hedef) {
+  const kayit = savasKaydiGetir(owner, hedef);
+  if (!kayit) return 0;
+  const deger = Number(kayit.yorgunluk?.[owner] || 0);
+  return clamp(round1(Number.isFinite(deger) ? deger : 0), 0, 100);
+}
+
+function savasSkorUygula(owner, hedef, delta) {
+  if (!Number.isFinite(delta) || delta === 0) return;
+  const kayit = savasKaydiGetir(owner, hedef, true);
+  if (!kayit) return;
+  const oncekiA = Number(kayit.skor?.[owner] || 0);
+  const oncekiB = Number(kayit.skor?.[hedef] || 0);
+  kayit.skor[owner] = savasSkorLimit(oncekiA + delta);
+  kayit.skor[hedef] = savasSkorLimit(oncekiB - delta);
+  kayit.sonCatismaTur = oyun.tur;
+}
+
+function savasYorgunlukUygula(owner, hedef, delta) {
+  if (!Number.isFinite(delta) || delta === 0) return;
+  const kayit = savasKaydiGetir(owner, hedef, true);
+  if (!kayit) return;
+  const onceki = Number(kayit.yorgunluk?.[owner] || 0);
+  kayit.yorgunluk[owner] = clamp(round1(onceki + delta), 0, 100);
+}
+
+function savasBaslat(a, b, meta = {}) {
+  if (!a || !b || a === b) return false;
+  const tablo = savasDurumuTablosu();
+  const key = iliskiAnahtar(a, b);
+  const yeni = !tablo[key];
+  tablo[key] = true;
+  savasKaydiBaslat(a, b, meta);
+  return yeni;
+}
+
+function savasBitir(a, b) {
+  if (!a || !b || a === b) return false;
+  const tablo = savasDurumuTablosu();
+  const key = iliskiAnahtar(a, b);
+  if (!tablo[key]) return false;
+  delete tablo[key];
+  const kayitTablo = savasKayitTablosu();
+  if (kayitTablo[key]) delete kayitTablo[key];
+  return true;
+}
+
+function ownerIttifakOrtaklari(owner) {
+  if (!owner) return [];
+  const ortaklar = aktifAnlasmalar()
+    .filter((a) => a.tip === "ittifak")
+    .filter((a) => a.taraf1 === owner || a.taraf2 === owner)
+    .map((a) => (a.taraf1 === owner ? a.taraf2 : a.taraf1))
+    .filter((ortak) => ortak && ortak !== owner);
+  return [...new Set(ortaklar)];
+}
+
+function ittifakZorunluSavasIlani(gonderen, hedef, kaynak = "İttifak yükümlülüğü") {
+  if (!gonderen || !hedef || gonderen === hedef) return false;
+  if (!ownerOyundaMi(gonderen) || !ownerOyundaMi(hedef)) return false;
+  if (savastaMi(gonderen, hedef)) return false;
+
+  ihanetIsle(gonderen, hedef, kaynak);
+  iliskiKoy(gonderen, hedef, Math.min(-70, iliskiDegeri(gonderen, hedef)));
+  const yeniSavas = savasBaslat(gonderen, hedef, { ilanEden: gonderen });
+  if (!yeniSavas) return false;
+
+  diploKayitEkle(
+    "savas-ilani",
+    `${ownerAd(gonderen)}, ${ownerAd(hedef)} tarafına ittifak yükümlülüğüyle savaş ilan etti.`,
+    "kotu",
+    { taraflar: [gonderen, hedef], kaynak: "ittifak-zinciri" }
+  );
+  return true;
+}
+
+function oyuncuIttifaklariniSavasaDahilEt(saldiran, hedef, kaynak = "İttifak çağrısı") {
+  if (saldiran !== "biz" && hedef !== "biz") return 0;
+  const dusman = saldiran === "biz" ? hedef : saldiran;
+  if (!ownerOyundaMi(dusman)) return 0;
+
+  const ortaklar = ownerIttifakOrtaklari("biz")
+    .filter((ortak) => ortak !== dusman)
+    .filter((ortak) => ownerOyundaMi(ortak));
+  if (!ortaklar.length) return 0;
+
+  let katilan = 0;
+  ortaklar.forEach((ortak) => {
+    const oldu = ittifakZorunluSavasIlani(ortak, dusman, `${kaynak}: ${ownerAd("biz")} yardımı`);
+    if (oldu) katilan += 1;
+  });
+  if (katilan > 0) {
+    diploKayitEkle(
+      "ittifak-zorunlu-katilim",
+      `${ownerAd("biz")} savaştayken ${katilan} müttefik otomatik savaşa dahil oldu.`,
+      "bilgi",
+      { taraflar: ["biz", dusman] }
+    );
+  }
+  return katilan;
+}
+
 function ticaretMinSermaye() {
   return Math.max(0, Math.round(DIPLOMASI.TICARET_MIN_SERMAYE || 0));
 }
 
-function ticaretSermayeYetersizMesaji(owner, minSermaye) {
+function ticaretLikiditeCarpani(owner, minSermaye = ticaretMinSermaye()) {
+  if (minSermaye <= 0) return 1;
   const para = ownerPara(owner);
-  return `${ownerAd(owner)}: ${para}₺ (gerekli ${minSermaye}₺)`;
+  const oran = para / Math.max(1, minSermaye);
+  if (oran >= 2.5) return 0.92;
+  if (oran >= 1.7) return 1;
+  if (oran >= 1.2) return 1.08;
+  return 1.2;
+}
+
+function ticaretTurModeli(owner, partner, minSermaye = ticaretMinSermaye()) {
+  const ownerGelir = Math.max(0, ownerGelirTabani(owner));
+  const partnerGelir = Math.max(0, ownerGelirTabani(partner));
+  const iliski = iliskiDegeri(owner, partner);
+  const pazarCarpani = clamp(0.75 + ((iliski + 20) / 220), 0.55, 1.25);
+  const brutHam = (ownerGelir * 0.16) + (partnerGelir * 0.1);
+  const brut = Math.max(4, Math.round(brutHam * pazarCarpani));
+  const maliyetCarpani = 0.58 * ticaretLikiditeCarpani(owner, minSermaye);
+  const maliyet = Math.max(2, Math.round(brut * maliyetCarpani));
+  const net = brut - maliyet;
+  return { brut, maliyet, net };
+}
+
+function ticaretRiskOrani(taraf1, taraf2, minSermaye = ticaretMinSermaye()) {
+  const bazRisk = clamp(Number(DIPLOMASI.TICARET_BATMA_SANSI || 0), 0, 0.5);
+  const hedefSermaye = Math.max(1, minSermaye || 1);
+  const para1 = ownerPara(taraf1);
+  const para2 = ownerPara(taraf2);
+  const baski1 = clamp(((hedefSermaye * 1.8) - para1) / (hedefSermaye * 1.8), 0, 1);
+  const baski2 = clamp(((hedefSermaye * 1.8) - para2) / (hedefSermaye * 1.8), 0, 1);
+  const iliski = iliskiDegeri(taraf1, taraf2);
+  const gerilimRiski = iliski < 15 ? clamp((15 - iliski) / 130, 0, 0.35) : 0;
+  const risk = (bazRisk * 0.45) + ((baski1 + baski2) * 0.02) + gerilimRiski;
+  return clamp(risk, 0.01, Math.max(0.02, bazRisk));
 }
 
 function teklifTipAdi(tip) {
@@ -55,21 +284,20 @@ function teklifTipAdi(tip) {
 
 function teklifGetiriGoturuMetni(tip, gonderen, hedef = "biz") {
   if (tip === "ticaret") {
-    const gelirBiz = Math.round(ownerGelirTabani(hedef) * DIPLOMASI.TICARET_GELIR_BONUS);
-    const gelirDiger = Math.round(ownerGelirTabani(gonderen) * DIPLOMASI.TICARET_GELIR_BONUS);
-    const batmaYuzde = Math.round((DIPLOMASI.TICARET_BATMA_SANSI || 0) * 100);
+    const minSermaye = ticaretMinSermaye();
+    const bizModel = ticaretTurModeli(hedef, gonderen, minSermaye);
+    const digerModel = ticaretTurModeli(gonderen, hedef, minSermaye);
+    const batmaYuzde = Math.round(ticaretRiskOrani(gonderen, hedef, minSermaye) * 100);
     const batmaMin = Math.round(DIPLOMASI.TICARET_BATMA_MIN_KAYIP || 0);
     const batmaMax = Math.round(DIPLOMASI.TICARET_BATMA_MAX_KAYIP || 0);
-    const minSermaye = ticaretMinSermaye();
     return [
       "Getirecek:",
       `+ ${DIPLOMASI.TICARET_SURESI} tur ticaret anlaşması`,
-      `+ Sana yaklaşık tur başı ${gelirBiz}₺`,
-      `+ ${ownerAd(gonderen)} için tur başı yaklaşık ${gelirDiger}₺`,
+      `+ Sana tur başı yaklaşık +${bizModel.brut}₺ brüt / -${bizModel.maliyet}₺ gider (Net +${bizModel.net}₺)`,
+      `+ ${ownerAd(gonderen)} için yaklaşık Net +${digerModel.net}₺/tur`,
       "Götürecek:",
-      "- Doğrudan para maliyeti yok",
-      `- Başlangıçta iki taraf için min sermaye: ${minSermaye}₺`,
-      `- Her tur %${batmaYuzde} batma riski (yaklaşık ${batmaMin}-${batmaMax}₺ kayıp)`,
+      `- Tur başı işletme gideri: yaklaşık ${bizModel.maliyet}₺`,
+      `- Dinamik kriz riski: tur başı yaklaşık %${batmaYuzde} (kayıp: ${batmaMin}-${batmaMax}₺)`,
       "- Reddedersen ilişki -4",
     ].join("\n");
   }
@@ -85,41 +313,30 @@ function teklifGetiriGoturuMetni(tip, gonderen, hedef = "biz") {
     ].join("\n");
   }
   if (tip === "baris") {
-    const iliski = iliskiDegeri(gonderen, hedef);
-    if (iliski <= -50) {
+    if (barisAktifMi(gonderen, hedef)) {
       return [
         "Getirecek:",
-        `+ ${DIPLOMASI.BARIS_SURESI} tur barış anlaşması`,
-        "+ İlişki artışı (+20)",
+        "+ Zaten aktif barış var (ek etkisi yok)",
         "Götürecek:",
-        "- Anlaşma boyunca saldırı yapılamaz",
+        "- Yeni statü oluşturmaz",
         "- Reddedersen ilişki -6",
       ].join("\n");
     }
-    if (iliski <= -30) {
+    if (savastaMi(gonderen, hedef)) {
       return [
         "Getirecek:",
-        `+ ${DIPLOMASI.ATESKES_SURESI} tur ateşkes`,
-        "+ İlişki artışı (+12)",
+        "+ Açık savaş durumu sona erer",
+        "+ Süresiz barış statüsü başlar",
         "Götürecek:",
-        "- Ateşkes süresince saldırı yok",
-        "- Reddedersen ilişki -6",
-      ].join("\n");
-    }
-    if (iliski < 0) {
-      return [
-        "Getirecek:",
-        "+ Normalleşme görüşmesi, ilişki +8",
-        "Götürecek:",
-        "- Saldırı yasağı oluşturmaz",
+        "- Yeniden saldırı için önce savaş ilanı gerekir",
         "- Reddedersen ilişki -6",
       ].join("\n");
     }
     return [
       "Getirecek:",
-      "+ İlişki iyileşmesi",
+      "+ Taraflar arasında süresiz barış statüsü başlar",
+      "+ Saldırı için önce anlaşmanın bozulması/savaş ilanı gerekir",
       "Götürecek:",
-      "- Bu seviyede barış görüşmesi açılamaz",
       "- Reddedersen ilişki -6",
     ].join("\n");
   }
@@ -139,6 +356,17 @@ function teklifGetiriGoturuMetni(tip, gonderen, hedef = "biz") {
       "+ Müttefike askeri destek verirsin",
       "Götürecek:",
       "- Yeni cephe açılır, birlik ve lojistik tüketir",
+    ].join("\n");
+  }
+  if (tip === "tehdit") {
+    const tazminat = Math.min(120, Math.max(0, Math.floor((oyun.fraksiyon?.[hedef]?.para || 0) * 0.12)));
+    return [
+      "Getirecek:",
+      `+ Kabul edersen ${DIPLOMASI.ATESKES_SURESI} tur ateşkes`,
+      `+ Kabul edersen yaklaşık ${tazminat}₺ tazminat ödersin`,
+      "Götürecek:",
+      "- Reddedersen ilişki -15",
+      "- Reddedersen saldırgan taraf daha da agresifleşebilir",
     ].join("\n");
   }
   return [
@@ -219,13 +447,6 @@ function oyuncuTeklifTipCooldownKoy(tip, sure = RED_COOLDOWN_TUR) {
   d.oyuncuTeklifTipCooldown[tip] = oyun.tur + Math.max(1, Math.floor(Number(sure) || RED_COOLDOWN_TUR));
 }
 
-function barisAsamasiBelirle(iliski) {
-  if (iliski <= -50) return "baris";
-  if (iliski <= -30) return "ateskes";
-  if (iliski < 0) return "normallesme";
-  return "uygunsuz";
-}
-
 function ittifakMudahaleKuyrugu() {
   const d = diplomasiDurumu();
   if (!Array.isArray(d.ittifakMudahaleKuyrugu)) d.ittifakMudahaleKuyrugu = [];
@@ -264,59 +485,37 @@ export function ittifakMudahaleKuyrugundanHazirOlanlariAl() {
 }
 
 function barisTeklifiSonuclandir(gonderen, hedef, kabul) {
-  const iliski = iliskiDegeri(gonderen, hedef);
-  const asama = barisAsamasiBelirle(iliski);
-  if (asama === "uygunsuz") {
-    return { ok: false, mesaj: "Barış/ateşkes için ilişki en az Tarafsız altı (0'dan düşük) olmalı." };
-  }
+  const savasAktif = savastaMi(gonderen, hedef);
   if (barisAktifMi(gonderen, hedef)) {
-    return { ok: false, mesaj: "Zaten aktif bir barış anlaşması var." };
-  }
-  if (asama === "ateskes" && ateskesAktifMi(gonderen, hedef)) {
-    return { ok: false, mesaj: "Zaten aktif bir ateşkes var." };
-  }
-  const kalan = redCooldownKontrol(gonderen, hedef, "baris");
-  if (kalan > 0) {
-    return { ok: false, mesaj: `Barış teklifi reddedildi, ${kalan} tur sonra tekrar denenebilir.` };
+    // Tutarsız state güvenliği: aktif barış varken savaş kaydı kalmışsa temizle.
+    if (savasAktif) savasBitir(gonderen, hedef);
+    return { ok: true, mesaj: "Barış zaten aktif. Savaş durumu güncellendi." };
   }
   if (!kabul) {
+    const kalan = redCooldownKontrol(gonderen, hedef, "baris");
+    if (kalan > 0) {
+      return { ok: false, mesaj: `Barış teklifi reddedildi, ${kalan} tur sonra tekrar denenebilir.` };
+    }
     iliskiDegistir(gonderen, hedef, -6, "Barış teklifi reddedildi");
     redCooldownKoy(gonderen, hedef, "baris");
     return { ok: false, mesaj: `${ownerAd(hedef)} barış teklifini reddetti. ${RED_COOLDOWN_TUR} tur boyunca yeni teklif yapılamaz.` };
   }
-
-  if (asama === "baris") {
-    iliskiDegistir(gonderen, hedef, +20, "Barış anlaşması imzalandı");
-    anlasmaEkle("baris", gonderen, hedef, DIPLOMASI.BARIS_SURESI);
-    diploKayitEkle(
-      "baris",
-      `${ownerAd(gonderen)} ve ${ownerAd(hedef)} arasında ${DIPLOMASI.BARIS_SURESI} turluk barış anlaşması imzalandı.`,
-      "iyi",
-      { taraflar: [gonderen, hedef] }
-    );
-    return { ok: true, mesaj: `Barış anlaşması kabul edildi (${DIPLOMASI.BARIS_SURESI} tur).` };
-  }
-
-  if (asama === "ateskes") {
-    iliskiDegistir(gonderen, hedef, +12, "Ateşkes kabul edildi");
-    anlasmaEkle("ateskes", gonderen, hedef, DIPLOMASI.ATESKES_SURESI);
-    diploKayitEkle(
-      "ateskes",
-      `${ownerAd(gonderen)} ve ${ownerAd(hedef)} arasında ${DIPLOMASI.ATESKES_SURESI} turluk ateşkes yapıldı.`,
-      "bilgi",
-      { taraflar: [gonderen, hedef] }
-    );
-    return { ok: true, mesaj: `Ateşkes kabul edildi (${DIPLOMASI.ATESKES_SURESI} tur).` };
-  }
-
-  iliskiDegistir(gonderen, hedef, +8, "Normalleşme görüşmesi");
+  tarafAnlasmalari(gonderen, hedef)
+    .filter((a) => a.tip === "ateskes")
+    .forEach((a) => anlasmaSil(a.id));
+  iliskiDegistir(gonderen, hedef, savasAktif ? +20 : +14, "Barış anlaşması imzalandı");
+  anlasmaEkle("baris", gonderen, hedef, DIPLOMASI.BARIS_SURESI, { kalici: true });
+  // Kabul edilen barış teklifi savaş kaydını her durumda kapatır.
+  savasBitir(gonderen, hedef);
   diploKayitEkle(
-    "normallesme",
-    `${ownerAd(gonderen)} ve ${ownerAd(hedef)} normalleşme görüşmesi yaptı (+8 ilişki).`,
-    "bilgi",
+    "baris",
+    savasAktif
+      ? `${ownerAd(gonderen)} ve ${ownerAd(hedef)} arasında barış teklifi kabul edildi, savaş sona erdi.`
+      : `${ownerAd(gonderen)} ve ${ownerAd(hedef)} arasında süresiz barış anlaşması imzalandı.`,
+    "iyi",
     { taraflar: [gonderen, hedef] }
   );
-  return { ok: true, mesaj: "Normalleşme görüşmesi kabul edildi (+8 ilişki)." };
+  return { ok: true, mesaj: savasAktif ? "Barış kabul edildi, savaş sona erdi." : "Barış anlaşması kabul edildi (süresiz)." };
 }
 
 function ittifakTeklifiSonuclandir(gonderen, hedef, kabul) {
@@ -348,17 +547,6 @@ function ticaretTeklifiSonuclandir(gonderen, hedef, kabul) {
   if (iliski < -10) return { ok: false, mesaj: "Ticaret için ilişki en az -10 olmalı." };
   if (ticaretAktifMi(gonderen, hedef)) return { ok: false, mesaj: "Aktif ticaret anlaşması zaten var." };
   const minSermaye = ticaretMinSermaye();
-  const paraGonderen = ownerPara(gonderen);
-  const paraHedef = ownerPara(hedef);
-  if (paraGonderen < minSermaye || paraHedef < minSermaye) {
-    return {
-      ok: false,
-      mesaj:
-        `Ticaret için iki tarafın da en az ${minSermaye}₺ sermayesi olmalı.\n` +
-        `${ticaretSermayeYetersizMesaji(gonderen, minSermaye)}\n` +
-        `${ticaretSermayeYetersizMesaji(hedef, minSermaye)}`,
-    };
-  }
   const kalan = redCooldownKontrol(gonderen, hedef, "ticaret");
   if (kalan > 0) {
     return { ok: false, mesaj: `Ticaret teklifi reddedildi, ${kalan} tur sonra tekrar denenebilir.` };
@@ -370,9 +558,9 @@ function ticaretTeklifiSonuclandir(gonderen, hedef, kabul) {
   }
   iliskiDegistir(gonderen, hedef, +12, "Ticaret anlaşması başladı");
   anlasmaEkle("ticaret", gonderen, hedef, DIPLOMASI.TICARET_SURESI);
-  const gelirGonderen = Math.round(ownerGelirTabani(gonderen) * DIPLOMASI.TICARET_GELIR_BONUS);
-  const gelirHedef = Math.round(ownerGelirTabani(hedef) * DIPLOMASI.TICARET_GELIR_BONUS);
-  const batmaYuzde = Math.round((DIPLOMASI.TICARET_BATMA_SANSI || 0) * 100);
+  const modelGonderen = ticaretTurModeli(gonderen, hedef, minSermaye);
+  const modelHedef = ticaretTurModeli(hedef, gonderen, minSermaye);
+  const batmaYuzde = Math.round(ticaretRiskOrani(gonderen, hedef, minSermaye) * 100);
   const batmaMin = Math.round(DIPLOMASI.TICARET_BATMA_MIN_KAYIP || 0);
   const batmaMax = Math.round(DIPLOMASI.TICARET_BATMA_MAX_KAYIP || 0);
   diploKayitEkle(
@@ -385,8 +573,9 @@ function ticaretTeklifiSonuclandir(gonderen, hedef, kabul) {
     ok: true,
     mesaj:
       "Ticaret anlaşması kabul edildi.\n" +
-      `Rapor: ${ownerAd(gonderen)} +${gelirGonderen}₺/tur, ${ownerAd(hedef)} +${gelirHedef}₺/tur.\n` +
-      `Risk: her tur %${batmaYuzde} batma (${batmaMin}-${batmaMax}₺ kayıp).`,
+      `Rapor: ${ownerAd(gonderen)} Net +${modelGonderen.net}₺/tur (+${modelGonderen.brut} / -${modelGonderen.maliyet}), ` +
+      `${ownerAd(hedef)} Net +${modelHedef.net}₺/tur (+${modelHedef.brut} / -${modelHedef.maliyet}).\n` +
+      `Risk: tur başı yaklaşık %${batmaYuzde} ticaret krizi (${batmaMin}-${batmaMax}₺ kayıp).`,
   };
 }
 
@@ -398,7 +587,9 @@ function anlasmaTaraflariAyniMi(anlasma, a, b) {
 }
 
 function aktifAnlasmaFiltre(anlasma) {
-  return anlasma && Number.isFinite(anlasma.bitis) && anlasma.bitis >= oyun.tur;
+  if (!anlasma) return false;
+  if (anlasma?.meta?.kalici || anlasma.bitis === null || anlasma.bitis === undefined) return true;
+  return Number.isFinite(anlasma.bitis) && anlasma.bitis >= oyun.tur;
 }
 
 function iliskiDurumMeta(deger) {
@@ -406,7 +597,7 @@ function iliskiDurumMeta(deger) {
   if (deger >= 30) return { etiket: "Dostluk", ikon: "💚", sinif: "dostluk" };
   if (deger > -30) return { etiket: "Tarafsız", ikon: "⚪", sinif: "tarafsiz" };
   if (deger > -70) return { etiket: "Gerilim", ikon: "🟠", sinif: "gerilim" };
-  return { etiket: "Savaş", ikon: "🔴", sinif: "savas" };
+  return { etiket: "Düşmanlık", ikon: "🔴", sinif: "savas" };
 }
 
 export function diplomasiDurumu() {
@@ -536,14 +727,14 @@ export function isDostCete(ownerA, ownerB) {
 export function isDostIttifak(ownerA, ownerB) {
   if (!ownerA || !ownerB) return false;
   if (ownerA === ownerB) return true;
-  return iliskiDegeri(ownerA, ownerB) >= 70 || ittifakAktifMi(ownerA, ownerB);
+  return ittifakAktifMi(ownerA, ownerB);
 }
 
 export function diplomasiSaldiriYasakSebebi(saldiran, hedef) {
   if (!saldiran || !hedef || saldiran === hedef) return "Geçersiz hedef.";
   if (barisAktifMi(saldiran, hedef)) return "Aktif barış anlaşması var.";
   if (ateskesAktifMi(saldiran, hedef)) return "Aktif ateşkes var.";
-  if (isDostIttifak(saldiran, hedef)) return "Aktif ittifak varken saldırı yapılamaz.";
+  if (ittifakAktifMi(saldiran, hedef)) return "Aktif ittifak varken saldırı yapılamaz.";
   return "";
 }
 
@@ -553,12 +744,14 @@ export function diplomasiSaldiriMumkunMu(saldiran, hedef) {
 
 function anlasmaEkle(tip, taraf1, taraf2, sure, meta = {}) {
   const d = diplomasiDurumu();
+  const kalici = !!meta?.kalici || tip === "baris";
   const mevcut = d.anlasmalar.find(
     (a) => aktifAnlasmaFiltre(a) && a.tip === tip && anlasmaTaraflariAyniMi(a, taraf1, taraf2)
   );
   if (mevcut) {
-    mevcut.bitis = Math.max(mevcut.bitis, oyun.tur + sure);
-    mevcut.meta = { ...(mevcut.meta || {}), ...meta };
+    if (kalici) mevcut.bitis = null;
+    else mevcut.bitis = Math.max(Number(mevcut.bitis || 0), oyun.tur + sure);
+    mevcut.meta = { ...(mevcut.meta || {}), ...meta, kalici };
     return mevcut;
   }
   const anlasma = {
@@ -567,8 +760,8 @@ function anlasmaEkle(tip, taraf1, taraf2, sure, meta = {}) {
     taraf1,
     taraf2,
     baslangic: oyun.tur,
-    bitis: oyun.tur + sure,
-    meta: { ...meta },
+    bitis: kalici ? null : oyun.tur + sure,
+    meta: { ...meta, kalici },
   };
   d.anlasmalar.push(anlasma);
   return anlasma;
@@ -625,13 +818,15 @@ export function savasBildir(gonderen, hedef) {
   if (!gonderen || !hedef || gonderen === hedef) {
     return { ok: false, mesaj: "Geçersiz savaş hedefi." };
   }
-  if (iliskiDegeri(gonderen, hedef) <= -70) {
+  if (savastaMi(gonderen, hedef)) {
     return { ok: false, mesaj: "Zaten savaş durumundasınız." };
   }
 
+  const d = diplomasiDurumu();
   ihanetIsle(gonderen, hedef, "Savaş ilanı");
-  iliskiKoy(gonderen, hedef, -70);
+  iliskiKoy(gonderen, hedef, Math.min(-70, iliskiDegeri(gonderen, hedef)));
   tarafAnlasmalari(gonderen, hedef).forEach((a) => anlasmaSil(a.id));
+  savasBaslat(gonderen, hedef, { ilanEden: gonderen });
 
   diploKayitEkle(
     "savas-ilani",
@@ -640,11 +835,22 @@ export function savasBildir(gonderen, hedef) {
     { taraflar: [gonderen, hedef] }
   );
 
+  const katilanMuttefik = oyuncuIttifaklariniSavasaDahilEt(gonderen, hedef, "Resmi savaş ilanı");
+
+  if (!d._savasciItibarCeza || typeof d._savasciItibarCeza !== "object") d._savasciItibarCeza = {};
   DIPLO_OWNERLER
     .filter((id) => id !== gonderen && id !== hedef)
-    .forEach((id) => iliskiDegistir(gonderen, id, -5, "Savaşçı itibarı", { sessiz: true }));
+    .forEach((id) => {
+      const key = `${gonderen}:${id}`;
+      const cooldownBitis = Number(d._savasciItibarCeza[key] || -999);
+      if (cooldownBitis > oyun.tur) return;
+      const ceza = savastaMi(gonderen, id) ? -0.4 : -1.2;
+      iliskiDegistir(gonderen, id, ceza, "Savaşçı itibarı", { sessiz: true });
+      d._savasciItibarCeza[key] = oyun.tur + 10;
+    });
 
-  return { ok: true, mesaj: `${ownerAd(hedef)} tarafına savaş ilan edildi.` };
+  const ek = katilanMuttefik > 0 ? ` ${katilanMuttefik} müttefik otomatik savaşa dahil oldu.` : "";
+  return { ok: true, mesaj: `${ownerAd(hedef)} tarafına savaş ilan edildi.${ek}` };
 }
 
 function ownerGelirTabani(owner) {
@@ -659,13 +865,29 @@ function ownerAskeriGuc(owner) {
     .reduce((t, u) => t + (u.adet || 0), 0);
 }
 
-function ticaretBatmaKaybiHesapla(owner) {
+function ownerSinirTemasi(ownerA, ownerB) {
+  if (!ownerA || !ownerB || ownerA === ownerB) return 0;
+  const aBolgeler = (oyun.bolgeler || []).filter((b) => b.owner === ownerA);
+  if (!aBolgeler.length) return 0;
+  let temas = 0;
+  aBolgeler.forEach((b) => {
+    const komsular = oyun.komsu?.[b.id] || [];
+    komsular.forEach((kid) => {
+      const kb = bolgeById(kid);
+      if (kb?.owner === ownerB) temas += 1;
+    });
+  });
+  return temas;
+}
+
+function ticaretBatmaKaybiHesapla(owner, ticaretHacmi = 0) {
   const para = Math.max(0, Math.round(oyun.fraksiyon?.[owner]?.para || 0));
   if (para <= 0) return 0;
   const oranKayip = Math.round(para * Math.max(0, DIPLOMASI.TICARET_BATMA_PARA_ORANI || 0));
+  const hacimKaybi = Math.round(Math.max(0, Number(ticaretHacmi) || 0) * (1.8 + Math.random() * 1.2));
   const minKayip = Math.max(0, Math.round(DIPLOMASI.TICARET_BATMA_MIN_KAYIP || 0));
   const maxKayip = Math.max(minKayip, Math.round(DIPLOMASI.TICARET_BATMA_MAX_KAYIP || minKayip));
-  const hedefKayip = clamp(oranKayip, minKayip, maxKayip);
+  const hedefKayip = clamp(Math.max(oranKayip, hacimKaybi), minKayip, maxKayip);
   return Math.min(para, hedefKayip);
 }
 
@@ -704,13 +926,63 @@ function teklifSonucu(hedef, sans) {
   return Math.random() < sans;
 }
 
+function barisKabulModeli(gonderen, hedef) {
+  const savasAktif = savastaMi(gonderen, hedef);
+  if (!savasAktif) {
+    const gucGonderen = gucPuani(gonderen);
+    const gucHedef = Math.max(1, gucPuani(hedef));
+    const gucFark = (gucGonderen - gucHedef) / gucHedef;
+    const bazSans = clamp(0.5 - Math.max(0, gucFark) * 0.2 + Math.max(0, -gucFark) * 0.15, 0.1, 0.9);
+    return {
+      sans: kabulSansiniHesapla(hedef, "baris", bazSans, 0),
+      savasAktif: false,
+      skor: 0,
+      yorgunluk: 0,
+    };
+  }
+
+  const hedefSkor = savasSkorDegeri(hedef, gonderen);
+  const hedefYorgunluk = savasYorgunlukDegeri(hedef, gonderen);
+  const gonderenYorgunluk = savasYorgunlukDegeri(gonderen, hedef);
+  const hedefGuc = Math.max(1, gucPuani(hedef));
+  const gonderenGuc = Math.max(1, gucPuani(gonderen));
+  const gucOrani = hedefGuc / gonderenGuc;
+
+  const zorunluSkor = Number(DIPLOMASI.SAVAS_BARISE_ZORLAMA_SKORU || -38);
+  const zorunluYorgunluk = Number(DIPLOMASI.SAVAS_BARISE_ZORLAMA_YORGUNLUK || 62);
+  const zorlanan = hedefSkor <= zorunluSkor || hedefYorgunluk >= zorunluYorgunluk;
+
+  let bazSans =
+    0.26 +
+    (hedefYorgunluk * 0.006) +
+    (Math.max(0, -hedefSkor) * 0.011) +
+    (gucOrani < 1 ? (1 - gucOrani) * 0.35 : 0) +
+    (ownerPara(hedef) < 180 ? 0.08 : 0) +
+    (gonderenYorgunluk > hedefYorgunluk ? 0.04 : 0);
+
+  bazSans -=
+    (Math.max(0, hedefSkor) * 0.007) +
+    (gucOrani > 1.12 ? 0.1 : 0) +
+    (ownerPara(hedef) > 480 ? 0.05 : 0);
+
+  if (zorlanan) bazSans = Math.max(bazSans, 0.68);
+  const sans = clamp(
+    bazSans + (ZORLUK[oyun.zorluk]?.aiDiploEsneklik || 0) + (aiKisilikCarpani(hedef, "baris") * 0.5),
+    0.05,
+    0.96
+  );
+
+  return {
+    sans,
+    savasAktif: true,
+    skor: round1(hedefSkor),
+    yorgunluk: round1(hedefYorgunluk),
+  };
+}
+
 export function barisTeklifiEt(gonderen, hedef) {
-  const gucGonderen = gucPuani(gonderen);
-  const gucHedef = Math.max(1, gucPuani(hedef));
-  const gucFark = (gucGonderen - gucHedef) / gucHedef;
-  const bazSans = clamp(0.5 - Math.max(0, gucFark) * 0.2 + Math.max(0, -gucFark) * 0.15, 0.1, 0.9);
-  const sans = kabulSansiniHesapla(hedef, "baris", bazSans, 0);
-  return barisTeklifiSonuclandir(gonderen, hedef, teklifSonucu(hedef, sans));
+  const model = barisKabulModeli(gonderen, hedef);
+  return barisTeklifiSonuclandir(gonderen, hedef, teklifSonucu(hedef, model.sans));
 }
 
 export function ittifakTeklifiEt(gonderen, hedef) {
@@ -725,6 +997,15 @@ export function ticaretTeklifiEt(gonderen, hedef) {
   return ticaretTeklifiSonuclandir(gonderen, hedef, teklifSonucu(hedef, sans));
 }
 
+export function rusvetTahminiArtis(gonderen, hedef, miktar) {
+  const para = Number(miktar);
+  if (!Number.isFinite(para) || para <= 0) return 0;
+  const mevcutIliski = iliskiDegeri(gonderen, hedef);
+  const bazArtis = (Math.sqrt(para) / 1.9) + (para / 120);
+  const yuksekIliskiCeza = mevcutIliski > 60 ? (mevcutIliski - 60) * 0.08 : 0;
+  return clamp(round1(bazArtis - yuksekIliskiCeza), 0.5, 22);
+}
+
 export function rusvetVer(gonderen, hedef, miktar) {
   const para = Number(miktar);
   if (!Number.isFinite(para) || para <= 0) return { ok: false, mesaj: "Geçersiz rüşvet miktarı." };
@@ -732,7 +1013,7 @@ export function rusvetVer(gonderen, hedef, miktar) {
   if (!fr || fr.para < para) return { ok: false, mesaj: "Yetersiz para." };
 
   fr.para -= para;
-  const artis = clamp(round1(para / 30), 0, 15);
+  const artis = rusvetTahminiArtis(gonderen, hedef, para);
   iliskiDegistir(gonderen, hedef, artis, `Rüşvet/ödeme (${Math.round(para)}₺)`);
   diploKayitEkle(
     "rusvet",
@@ -744,25 +1025,30 @@ export function rusvetVer(gonderen, hedef, miktar) {
   return { ok: true, mesaj: `Rüşvet verildi (+${artis}).`, artis };
 }
 
-export function tehditEt(gonderen, hedef) {
+function tehditOnKosulKontrol(gonderen, hedef) {
   const d = diplomasiDurumu();
   const key = iliskiAnahtar(gonderen, hedef);
   const kalan = (d.tehditCooldown?.[key] || 0) - oyun.tur;
-  if (kalan > 0) return { ok: false, mesaj: `Bu hedefe tekrar tehdit için ${kalan} tur beklemelisin.` };
-
+  if (kalan > 0) {
+    return { ok: false, mesaj: `Bu hedefe tekrar tehdit için ${kalan} tur beklemelisin.` };
+  }
   const gucGonderen = gucPuani(gonderen);
   const gucHedef = Math.max(1, gucPuani(hedef));
   if (gucGonderen < gucHedef * 1.3) {
     return { ok: false, mesaj: "Tehdit için askeri güç en az %30 üstün olmalı." };
   }
-
   const fark = gucGonderen / gucHedef;
   const sans = clamp(0.35 + (fark - 1.3) * 0.35 - aiKisilikCarpani(hedef, "tehditDirenci"), 0.1, 0.9);
-  const kabul = teklifSonucu(hedef, sans);
+  return { ok: true, sans };
+}
+
+function tehditSonuclandir(gonderen, hedef, kabul) {
+  const d = diplomasiDurumu();
+  const key = iliskiAnahtar(gonderen, hedef);
   d.tehditCooldown[key] = oyun.tur + DIPLOMASI.TEHDIT_BEKLEME;
 
   if (!kabul) {
-    iliskiDegistir(gonderen, hedef, -15, "Ültimaton reddedildi");
+    iliskiDegistir(gonderen, hedef, -15, "Ültimatom reddedildi");
     if (oyun.fraksiyon?.[hedef]) {
       oyun.fraksiyon[hedef]._ofke = (oyun.fraksiyon[hedef]._ofke || 0) + 30;
     }
@@ -772,12 +1058,12 @@ export function tehditEt(gonderen, hedef) {
       "kotu",
       { taraflar: [gonderen, hedef] }
     );
-    return { ok: false, mesaj: "Tehdit geri tepti, hedef direndi." };
+    return { ok: false, mesaj: "Ültimatom reddedildi." };
   }
 
   anlasmaEkle("ateskes", gonderen, hedef, DIPLOMASI.ATESKES_SURESI, { tehditKaynakli: true });
   const tribute = Math.min(120, Math.max(0, Math.floor((oyun.fraksiyon?.[hedef]?.para || 0) * 0.12)));
-  if (tribute > 0) {
+  if (tribute > 0 && oyun.fraksiyon?.[hedef] && oyun.fraksiyon?.[gonderen]) {
     oyun.fraksiyon[hedef].para -= tribute;
     oyun.fraksiyon[gonderen].para += tribute;
   }
@@ -787,7 +1073,14 @@ export function tehditEt(gonderen, hedef) {
     "iyi",
     { taraflar: [gonderen, hedef] }
   );
-  return { ok: true, mesaj: "Hedef geri adım attı ve geçici olarak boyun eğdi." };
+  return { ok: true, mesaj: "Ültimatom kabul edildi, geçici ateşkes başladı." };
+}
+
+export function tehditEt(gonderen, hedef) {
+  const onKosul = tehditOnKosulKontrol(gonderen, hedef);
+  if (!onKosul.ok) return { ok: false, mesaj: onKosul.mesaj };
+  const kabul = teklifSonucu(hedef, onKosul.sans);
+  return tehditSonuclandir(gonderen, hedef, kabul);
 }
 
 function kesifliHedefSahipleri(owner, hariç = []) {
@@ -892,15 +1185,35 @@ export function sabotajTeklifiEt(gonderen, hedef) {
 export function diplomasiSaldiriBaslat(saldiran, hedef, kaynak = "saldiri", opts = {}) {
   const d = diplomasiDurumu();
   if (!d._saldiriKayit || typeof d._saldiriKayit !== "object") d._saldiriKayit = {};
+  if (!d._saldirganAlgisi || typeof d._saldirganAlgisi !== "object") d._saldirganAlgisi = {};
   const turKey = `${oyun.tur}:${saldiran}->${hedef}`;
   if (d._saldiriKayit[turKey]) return;
   d._saldiriKayit[turKey] = true;
 
+  const yeniSavas = savasBaslat(saldiran, hedef, { ilanEden: saldiran });
   ihanetIsle(saldiran, hedef, kaynak);
   iliskiDegistir(saldiran, hedef, -15, "Askeri saldırı başlatıldı", { sessiz: false });
+  if (yeniSavas) {
+    diploKayitEkle(
+      "savas-basladi",
+      `${ownerAd(saldiran)} ve ${ownerAd(hedef)} arasında resmi savaş durumu başladı.`,
+      "kotu",
+      { taraflar: [saldiran, hedef] }
+    );
+    oyuncuIttifaklariniSavasaDahilEt(saldiran, hedef, "Sıcak çatışma");
+  }
+  const savasTablosu = (d.savasDurumu && typeof d.savasDurumu === "object") ? d.savasDurumu : {};
   DIPLO_OWNERLER
     .filter((id) => id !== saldiran && id !== hedef)
-    .forEach((id) => iliskiDegistir(saldiran, id, -2, "Saldırgan algısı", { sessiz: true }));
+    .forEach((id) => {
+      const algiKey = iliskiAnahtar(saldiran, id);
+      const cooldownBitis = Number(d._saldirganAlgisi[algiKey] || -999);
+      if (cooldownBitis > oyun.tur) return;
+      const aktifSavas = !!savasTablosu[algiKey];
+      const ceza = aktifSavas ? -0.2 : -0.6;
+      iliskiDegistir(saldiran, id, ceza, "Saldırgan algısı", { sessiz: true });
+      d._saldirganAlgisi[algiKey] = oyun.tur + 4;
+    });
 
   const hedefIttifaklari = aktifAnlasmalar()
     .filter((a) => a.tip === "ittifak")
@@ -909,6 +1222,7 @@ export function diplomasiSaldiriBaslat(saldiran, hedef, kaynak = "saldiri", opts
     .filter((ortak) => ortak !== saldiran);
 
   hedefIttifaklari.forEach((ortak) => {
+    if (savastaMi(ortak, saldiran)) return;
     diploKayitEkle(
       "ittifak-uyari",
       `${ownerAd(hedef)} saldırı altında. İttifak ortağı ${ownerAd(ortak)} için savunma uyarısı geçti.`,
@@ -959,6 +1273,9 @@ export function diplomasiSaldiriBaslat(saldiran, hedef, kaynak = "saldiri", opts
 export function diplomasiFetihSonucu(saldiran, savunan, bolgeId = null) {
   if (!saldiran || !savunan || saldiran === savunan) return;
   iliskiDegistir(saldiran, savunan, -25, "Toprak fethi");
+  savasSkorUygula(saldiran, savunan, Number(DIPLOMASI.SAVAS_SKOR_FETIH || 16));
+  savasYorgunlukUygula(saldiran, savunan, 2.4);
+  savasYorgunlukUygula(savunan, saldiran, 8.5);
   const bolge = bolgeId ? bolgeById(bolgeId) : null;
   diploKayitEkle(
     "fetih",
@@ -966,6 +1283,58 @@ export function diplomasiFetihSonucu(saldiran, savunan, bolgeId = null) {
     "kotu",
     { taraflar: [saldiran, savunan] }
   );
+}
+
+export function diplomasiSavasCatismasiSonucu(saldiran, savunan, detay = {}) {
+  if (!saldiran || !savunan || saldiran === savunan) return;
+  if (!savastaMi(saldiran, savunan)) return;
+
+  const saldiranKayip = Math.max(0, Math.round(Number(detay.saldiranKayip) || 0));
+  const savunanKayip = Math.max(0, Math.round(Number(detay.savunanKayip) || 0));
+  const saldiriBasarili = !!detay.saldiriBasarili;
+  const fetih = !!detay.fetih;
+  const kayipEtki = Math.max(0.05, Number(DIPLOMASI.SAVAS_SKOR_KAYIP_ETKISI || 0.28));
+  const savunmaSkoru = Math.max(2, Number(DIPLOMASI.SAVAS_SKOR_SAVUNMA || 8));
+
+  const kayipDelta = round1((savunanKayip - saldiranKayip) * kayipEtki);
+  if (kayipDelta !== 0) savasSkorUygula(saldiran, savunan, kayipDelta);
+  if (!fetih && saldiriBasarili) savasSkorUygula(saldiran, savunan, 3);
+  if (!saldiriBasarili) savasSkorUygula(savunan, saldiran, savunmaSkoru * 0.55);
+
+  const yorgKayipEtki = Math.max(0.03, Number(DIPLOMASI.SAVAS_YORGUNLUK_KAYIP_ETKISI || 0.16));
+  const saldiranYorg = (saldiranKayip * yorgKayipEtki) + (saldiriBasarili ? 0.4 : 1.5);
+  const savunanYorg = (savunanKayip * yorgKayipEtki) + (saldiriBasarili ? 1.1 : 0.5);
+  savasYorgunlukUygula(saldiran, savunan, saldiranYorg + (fetih ? 1.4 : 0));
+  savasYorgunlukUygula(savunan, saldiran, savunanYorg + (fetih ? 4.2 : 0));
+}
+
+export function savasSkorOzeti(owner, hedef) {
+  if (!owner || !hedef || owner === hedef) return null;
+  const kayit = savasKaydiGetir(owner, hedef);
+  if (!kayit || !savastaMi(owner, hedef)) return null;
+  const benimSkor = savasSkorDegeri(owner, hedef);
+  const hedefSkor = savasSkorDegeri(hedef, owner);
+  const benimYorgunluk = savasYorgunlukDegeri(owner, hedef);
+  const hedefYorgunluk = savasYorgunlukDegeri(hedef, owner);
+  const benimTeklifSans = Math.round(barisKabulModeli(owner, hedef).sans * 100);
+  const hedefTeklifSans = Math.round(barisKabulModeli(hedef, owner).sans * 100);
+  return {
+    taraflar: [owner, hedef],
+    baslangicTur: Number(kayit.baslangicTur || oyun.tur),
+    sure: Math.max(0, oyun.tur - Number(kayit.baslangicTur || oyun.tur)),
+    skor: {
+      [owner]: benimSkor,
+      [hedef]: hedefSkor,
+    },
+    yorgunluk: {
+      [owner]: benimYorgunluk,
+      [hedef]: hedefYorgunluk,
+    },
+    barisTeklifSans: {
+      [owner]: benimTeklifSans,
+      [hedef]: hedefTeklifSans,
+    },
+  };
 }
 
 export function diplomasiSuikastSonucu(saldiran, hedef, basarili) {
@@ -1013,13 +1382,13 @@ export function ittifakSaldiriCarpani(saldiran, hedefOwner) {
 }
 
 export function savasIliskiModifiyeri(saldiran, hedef) {
-  const iliski = iliskiDegeri(saldiran, hedef);
-  if (iliski <= -70) {
+  if (savastaMi(saldiran, hedef)) {
     return {
       saldiriCarpani: 1 + Number(DIPLOMASI.SAVAS_SALDIRI_BONUS || 0),
       etiket: "Savaş bonusu",
     };
   }
+  const iliski = iliskiDegeri(saldiran, hedef);
   if (iliski >= 30) {
     return {
       saldiriCarpani: 1 - Number(DIPLOMASI.IHANET_SALDIRI_CEZA || 0),
@@ -1031,28 +1400,199 @@ export function savasIliskiModifiyeri(saldiran, hedef) {
 
 function iliskiHafizaSolmasi(messages) {
   const d = diplomasiDurumu();
-  let gerilimDegisim = 0;
+  let gerilimKorundu = 0;
   let savasDegisim = 0;
+  let rekabetDegisim = 0;
+  let dostlukKorundu = 0;
   Object.entries(d.iliskiler).forEach(([key, val]) => {
     if (!Number.isFinite(val) || Math.abs(val) < 0.05) return;
-    if (val <= -70) {
-      d.iliskiler[key] = round1(Math.max(-100, val - Number(DIPLOMASI.SAVAS_CURUMESI || 0)));
+    const taraflar = String(key).split("-");
+    const savasAktif = !!d.savasDurumu?.[key];
+    const hafizaToparlanma = clamp(Number(DIPLOMASI.ILISKI_HAFIZA_SOLMASI || 0.5), 0.1, 1.2);
+    let yeniDeger = val;
+
+    if (savasAktif) {
+      const asindir = Math.max(0.5, Number(DIPLOMASI.SAVAS_CURUMESI || 0) * 0.7);
+      yeniDeger = round1(Math.max(-100, val - asindir));
       savasDegisim += 1;
-      return;
+    } else if (val <= -70) {
+      // Köklü düşmanlık hızla sıfıra dönmez.
+      yeniDeger = round1(Math.min(-45, val + Math.max(0.06, hafizaToparlanma * 0.12)));
+      gerilimKorundu += 1;
+    } else if (val <= -35) {
+      yeniDeger = round1(Math.min(-20, val + Math.max(0.1, hafizaToparlanma * 0.2)));
+      gerilimKorundu += 1;
+    } else if (val >= 70) {
+      // Güçlü dostluk/ittifak hafızası da daha kalıcı.
+      yeniDeger = round1(Math.max(45, val - Math.max(0.06, hafizaToparlanma * 0.12)));
+      dostlukKorundu += 1;
+    } else if (val >= 35) {
+      yeniDeger = round1(Math.max(20, val - Math.max(0.1, hafizaToparlanma * 0.22)));
+      dostlukKorundu += 1;
+    } else if (Math.abs(val) <= 15) {
+      if (val > 0) yeniDeger = round1(Math.max(0, val - Math.max(0.12, hafizaToparlanma * 0.42)));
+      else yeniDeger = round1(Math.min(0, val + Math.max(0.12, hafizaToparlanma * 0.42)));
+    } else if (val > 0) {
+      yeniDeger = round1(Math.max(0, val - Math.max(0.08, hafizaToparlanma * 0.28)));
+    } else {
+      yeniDeger = round1(Math.min(0, val + Math.max(0.08, hafizaToparlanma * 0.28)));
     }
-    if (val <= -30) {
-      d.iliskiler[key] = round1(Math.max(-100, val - Number(DIPLOMASI.GERILIM_CURUMESI || 0)));
-      gerilimDegisim += 1;
-      return;
+
+    // Sınır teması olan yakın güçler arasında rekabet baskısı birikerek kutuplaşma üretir.
+    if (!savasAktif && taraflar.length === 2) {
+      const [a, b] = taraflar;
+      if (ownerOyundaMi(a) && ownerOyundaMi(b) && !ittifakAktifMi(a, b)) {
+        const temas = ownerSinirTemasi(a, b);
+        if (temas > 0) {
+          const gucA = Math.max(1, gucPuani(a));
+          const gucB = Math.max(1, gucPuani(b));
+          const oran = gucA / gucB;
+          const dengeliGuc = oran >= 0.75 && oran <= 1.35;
+
+          let rekabetBasinci = 0;
+          if (yeniDeger < 15) rekabetBasinci += Math.min(0.45, temas * 0.06);
+          if (yeniDeger < -10) rekabetBasinci += Math.min(0.35, temas * 0.04);
+          if (dengeliGuc) rekabetBasinci += 0.14;
+
+          if (ticaretAktifMi(a, b)) rekabetBasinci *= 0.65;
+          if (barisAktifMi(a, b) || ateskesAktifMi(a, b)) rekabetBasinci *= 0.7;
+
+          if (rekabetBasinci > 0 && Math.random() < 0.55) {
+            yeniDeger = round1(Math.max(-100, yeniDeger - rekabetBasinci));
+            rekabetDegisim += 1;
+          }
+        }
+      }
     }
-    if (val > 0) d.iliskiler[key] = round1(Math.max(0, val - DIPLOMASI.ILISKI_HAFIZA_SOLMASI));
-    else d.iliskiler[key] = round1(Math.min(0, val + DIPLOMASI.ILISKI_HAFIZA_SOLMASI));
+
+    d.iliskiler[key] = yeniDeger;
   });
-  if (gerilimDegisim > 0 || savasDegisim > 0) {
-    messages.push(`Gerilim/Savaş çürümesi uygulandı (${gerilimDegisim + savasDegisim} ilişki çifti).`);
+  if (savasDegisim > 0) {
+    messages.push(`Aktif savaşlar ilişkileri sertleştirdi (${savasDegisim} ilişki çifti).`);
+  } else if (rekabetDegisim > 0) {
+    messages.push(`Sınır rekabeti kutuplaşmayı artırdı (${rekabetDegisim} ilişki çifti).`);
+  } else if (gerilimKorundu > 0 || dostlukKorundu > 0) {
+    messages.push("İlişkiler bloklaşma etkisiyle daha yavaş çözüldü.");
   } else {
-    messages.push("İlişkiler hafıza solmasıyla merkeze yaklaştı.");
+    messages.push("İlişkiler sınırlı hafıza solması yaşadı.");
   }
+}
+
+function savasDinamikTick(messages) {
+  const d = diplomasiDurumu();
+  const savasDurumu = savasDurumuTablosu();
+  let aktifSavas = 0;
+  Object.keys(savasDurumu).forEach((key) => {
+    if (!savasDurumu[key]) return;
+    const taraflar = String(key).split("-");
+    if (taraflar.length !== 2) return;
+    const [a, b] = taraflar;
+    if (!ownerOyundaMi(a) || !ownerOyundaMi(b)) return;
+    const kayit = savasKaydiGetir(a, b, true, { ilanEden: a });
+    if (!kayit) return;
+    aktifSavas += 1;
+
+    const turYorg = Math.max(0.2, Number(DIPLOMASI.SAVAS_YORGUNLUK_TUR || 0.9));
+    const paraA = ownerPara(a);
+    const paraB = ownerPara(b);
+    const gucA = Math.max(1, gucPuani(a));
+    const gucB = Math.max(1, gucPuani(b));
+
+    let yorgA = turYorg;
+    let yorgB = turYorg;
+    if (paraA < 180) yorgA += 0.45;
+    if (paraB < 180) yorgB += 0.45;
+    if (gucA < gucB * 0.9) yorgA += 0.35;
+    if (gucB < gucA * 0.9) yorgB += 0.35;
+    savasYorgunlukUygula(a, b, yorgA);
+    savasYorgunlukUygula(b, a, yorgB);
+
+    const aStart = Number(kayit.baslangicBolge?.[a] || ownerBolgeSayisiDiplo(a));
+    const bStart = Number(kayit.baslangicBolge?.[b] || ownerBolgeSayisiDiplo(b));
+    const aNow = ownerBolgeSayisiDiplo(a);
+    const bNow = ownerBolgeSayisiDiplo(b);
+    const aLoss = Math.max(0, aStart - aNow);
+    const bLoss = Math.max(0, bStart - bNow);
+    const sahaDelta = round1((bLoss - aLoss) * 0.9);
+    if (sahaDelta !== 0) savasSkorUygula(a, b, sahaDelta);
+
+    const sessizTur = Math.max(0, oyun.tur - Number(kayit.sonCatismaTur || oyun.tur));
+    if (sessizTur >= 10) {
+      savasYorgunlukUygula(a, b, 0.8);
+      savasYorgunlukUygula(b, a, 0.8);
+    }
+  });
+
+  if (aktifSavas > 0 && oyun.tur % 8 === 0) {
+    messages.push(`Savaş yorgunluğu ve cephe skoru güncellendi (${aktifSavas} aktif savaş).`);
+  }
+
+  if (!d._savasciItibarCeza || typeof d._savasciItibarCeza !== "object") d._savasciItibarCeza = {};
+}
+
+function tarafDurumTemizligi(messages) {
+  const d = diplomasiDurumu();
+  const aktifOwnerler = new Set(
+    (oyun.bolgeler || [])
+      .map((b) => b?.owner)
+      .filter((owner) => owner && owner !== "tarafsiz")
+  );
+
+  const savasDurumu = savasDurumuTablosu();
+  const savasKayit = savasKayitTablosu();
+  Object.keys(savasDurumu).forEach((key) => {
+    const taraflar = String(key).split("-");
+    if (taraflar.length !== 2) {
+      delete savasDurumu[key];
+      return;
+    }
+    const [a, b] = taraflar;
+    if (aktifOwnerler.has(a) && aktifOwnerler.has(b)) return;
+    delete savasDurumu[key];
+    if (savasKayit[key]) delete savasKayit[key];
+    diploKayitEkle(
+      "savas-sonlandi-dagilma",
+      `${ownerAd(a)} ↔ ${ownerAd(b)} savaş durumu taraflardan biri dağıldığı için sona erdi.`,
+      "bilgi",
+      { taraflar: [a, b] }
+    );
+    if (a === "biz" || b === "biz") {
+      messages.push({
+        metin: `🕊️ ${ownerAd(a)} ↔ ${ownerAd(b)} savaş durumu taraflardan biri dağıldığı için kapandı.`,
+        popup: true,
+        log: true,
+        baslik: "Savaş Durumu",
+      });
+    }
+  });
+  Object.keys(savasKayit).forEach((key) => {
+    if (!savasDurumu[key]) delete savasKayit[key];
+  });
+
+  const kalanAnlasmalar = [];
+  (Array.isArray(d.anlasmalar) ? d.anlasmalar : []).forEach((a) => {
+    if (!a) return;
+    const tarafAktif = aktifOwnerler.has(a.taraf1) && aktifOwnerler.has(a.taraf2);
+    if (tarafAktif) {
+      kalanAnlasmalar.push(a);
+      return;
+    }
+    diploKayitEkle(
+      "anlasma-sonlandi-dagilma",
+      `${ownerAd(a.taraf1)} ↔ ${ownerAd(a.taraf2)} (${a.tip}) anlaşması taraflardan biri dağıldığı için kapandı.`,
+      "bilgi",
+      { taraflar: [a.taraf1, a.taraf2] }
+    );
+    if (a.taraf1 === "biz" || a.taraf2 === "biz") {
+      messages.push({
+        metin: `ℹ️ ${ownerAd(a.taraf1)} ↔ ${ownerAd(a.taraf2)} (${a.tip}) anlaşması taraflardan biri dağıldığı için sonlandı.`,
+        popup: true,
+        log: true,
+        baslik: "Diplomasi Durumu",
+      });
+    }
+  });
+  d.anlasmalar = kalanAnlasmalar;
 }
 
 function anlasmaBakimVeTemizlik(messages) {
@@ -1060,7 +1600,8 @@ function anlasmaBakimVeTemizlik(messages) {
   const kalan = [];
   d.anlasmalar.forEach((a) => {
     if (!a) return;
-    if (a.bitis < oyun.tur) {
+    const kalici = !!a?.meta?.kalici || a.bitis === null || a.bitis === undefined;
+    if (!kalici && a.bitis < oyun.tur) {
       const oyuncuyuIlgilendirir = a.taraf1 === "biz" || a.taraf2 === "biz";
       if (oyuncuyuIlgilendirir) {
         const metin = `${ownerAd(a.taraf1)} ↔ ${ownerAd(a.taraf2)} (${a.tip}) anlaşması sona erdi.`;
@@ -1102,19 +1643,21 @@ function anlasmaBakimVeTemizlik(messages) {
       const minSermaye = ticaretMinSermaye();
       const para1 = ownerPara(a.taraf1);
       const para2 = ownerPara(a.taraf2);
-      if (minSermaye > 0 && (para1 < minSermaye || para2 < minSermaye)) {
-        iliskiDegistir(a.taraf1, a.taraf2, -4, "Ticaret sermayesi tükendi");
+      const model1 = ticaretTurModeli(a.taraf1, a.taraf2, minSermaye);
+      const model2 = ticaretTurModeli(a.taraf2, a.taraf1, minSermaye);
+      const riskOrani = ticaretRiskOrani(a.taraf1, a.taraf2, minSermaye);
+      if (para1 < model1.maliyet || para2 < model2.maliyet) {
+        iliskiDegistir(a.taraf1, a.taraf2, -4, "Ticaret işletme maliyeti ödenemedi");
         const mesaj =
-          `Ticaret kapandı: sermaye eşiği ${minSermaye}₺ altına düştü. ` +
-          `${ticaretSermayeYetersizMesaji(a.taraf1, minSermaye)} • ${ticaretSermayeYetersizMesaji(a.taraf2, minSermaye)}`;
+          `Ticaret kapandı: işletme gideri karşılanamadı. ` +
+          `${ownerAd(a.taraf1)} gider ${model1.maliyet}₺, ${ownerAd(a.taraf2)} gider ${model2.maliyet}₺.`;
         diploKayitEkle(
-          "ticaret-sermaye-yetersiz",
+          "ticaret-isletme-yetersiz",
           mesaj,
           "kotu",
-          { taraflar: [a.taraf1, a.taraf2], minSermaye }
+          { taraflar: [a.taraf1, a.taraf2], gider1: model1.maliyet, gider2: model2.maliyet }
         );
-        const oyuncuyuIlgilendirir = a.taraf1 === "biz" || a.taraf2 === "biz";
-        if (oyuncuyuIlgilendirir) {
+        if (a.taraf1 === "biz" || a.taraf2 === "biz") {
           messages.push({
             metin: `📉 ${mesaj}\nTicaret raporu: +0₺ / -0₺ (Net 0₺)`,
             popup: false,
@@ -1124,9 +1667,11 @@ function anlasmaBakimVeTemizlik(messages) {
         }
         return;
       }
-      if (Math.random() < Math.max(0, DIPLOMASI.TICARET_BATMA_SANSI || 0)) {
-        const batan = Math.random() < 0.5 ? a.taraf1 : a.taraf2;
-        const kayip = ticaretBatmaKaybiHesapla(batan);
+      if (Math.random() < riskOrani) {
+        const zayifTaraf = para1 <= para2 ? a.taraf1 : a.taraf2;
+        const digerTaraf = zayifTaraf === a.taraf1 ? a.taraf2 : a.taraf1;
+        const batan = Math.random() < 0.7 ? zayifTaraf : digerTaraf;
+        const kayip = ticaretBatmaKaybiHesapla(batan, model1.brut + model2.brut);
         if (kayip > 0 && oyun.fraksiyon?.[batan]) {
           oyun.fraksiyon[batan].para = Math.max(0, (oyun.fraksiyon[batan].para || 0) - kayip);
         }
@@ -1157,17 +1702,15 @@ function anlasmaBakimVeTemizlik(messages) {
         }
         return;
       }
-      const bonus1 = Math.round(ownerGelirTabani(a.taraf1) * DIPLOMASI.TICARET_GELIR_BONUS);
-      const bonus2 = Math.round(ownerGelirTabani(a.taraf2) * DIPLOMASI.TICARET_GELIR_BONUS);
-      if (oyun.fraksiyon?.[a.taraf1]) oyun.fraksiyon[a.taraf1].para += bonus1;
-      if (oyun.fraksiyon?.[a.taraf2]) oyun.fraksiyon[a.taraf2].para += bonus2;
+      if (oyun.fraksiyon?.[a.taraf1]) oyun.fraksiyon[a.taraf1].para += model1.net;
+      if (oyun.fraksiyon?.[a.taraf2]) oyun.fraksiyon[a.taraf2].para += model2.net;
       if (a.taraf1 === "biz" || a.taraf2 === "biz") {
-        const bizGelir = a.taraf1 === "biz" ? bonus1 : bonus2;
-        const net = bizGelir;
+        const bizModel = a.taraf1 === "biz" ? model1 : model2;
+        const net = bizModel.net;
         messages.push({
           metin:
             `📊 Ticaret raporu (${ownerAd(a.taraf1)} ↔ ${ownerAd(a.taraf2)}): ` +
-            `+${bizGelir}₺ / -0₺ (Net ${net >= 0 ? "+" : ""}${net}₺)`,
+            `+${bizModel.brut}₺ / -${bizModel.maliyet}₺ (Net ${net >= 0 ? "+" : ""}${net}₺)`,
           popup: false,
           log: true,
           baslik: "Ticaret Raporu",
@@ -1185,15 +1728,16 @@ function savasBarisKritikBildirimleri(messages) {
     d.kritikBildirim = { savasDurumu: {}, anlasmaKalan: {} };
   }
   const takip = d.kritikBildirim;
+  const savasTablosu = (d.savasDurumu && typeof d.savasDurumu === "object")
+    ? d.savasDurumu
+    : {};
   if (!takip.savasDurumu || typeof takip.savasDurumu !== "object") takip.savasDurumu = {};
   if (!takip.anlasmaKalan || typeof takip.anlasmaKalan !== "object") takip.anlasmaKalan = {};
 
   DIPLO_OWNERLER
     .filter((owner) => owner !== "biz")
     .forEach((owner) => {
-      const iliskiKey = iliskiAnahtar("biz", owner);
-      const iliski = Number(d.iliskiler?.[iliskiKey] || 0);
-      const savasta = iliski <= -70;
+      const savasta = !!savasTablosu[iliskiAnahtar("biz", owner)];
       const oncekiSavas = !!takip.savasDurumu[owner];
       if (savasta && !oncekiSavas) {
         messages.push({
@@ -1220,6 +1764,7 @@ function savasBarisKritikBildirimleri(messages) {
   const aktifBarisAnlasmalari = (Array.isArray(d.anlasmalar) ? d.anlasmalar : [])
     .filter(aktifAnlasmaFiltre)
     .filter((a) => a && (a.taraf1 === "biz" || a.taraf2 === "biz"))
+    .filter((a) => Number.isFinite(a.bitis))
     .filter((a) => a.tip === "baris" || a.tip === "ateskes");
 
   const aktifAnlasmaIdleri = new Set();
@@ -1425,8 +1970,11 @@ export function diplomasiTeklifYanitla(teklifId, kabul = false) {
       });
       sonuc = { ok: true, mesaj: `${ownerAd(savunulan)} için müdahale hazırlığı başladı (1 tur).` };
     }
-  }
-  else sonuc = { ok: false, mesaj: "Desteklenmeyen teklif tipi." };
+  } else if (teklif.tip === "tehdit") {
+    const onKosul = tehditOnKosulKontrol(gonderen, hedef);
+    if (!onKosul.ok) sonuc = { ok: false, mesaj: onKosul.mesaj };
+    else sonuc = tehditSonuclandir(gonderen, hedef, !!kabul);
+  } else sonuc = { ok: false, mesaj: "Desteklenmeyen teklif tipi." };
 
   teklif.durum = "sonuclandi";
   teklif.kabul = !!kabul;
@@ -1449,15 +1997,18 @@ function ownerAktifAnlasmaSayisi(owner, tipler = null) {
 
 function aiTeklifDenemesi(owner, hedef, tip) {
   if (owner === hedef) return null;
-  if (!oyun.fraksiyon?.[owner] || !oyun.fraksiyon?.[hedef]) return null;
-  if (hedef === "biz" && (tip === "baris" || tip === "ittifak" || tip === "ticaret")) {
-    const tipKalan = oyuncuTeklifTipCooldownKalan(tip);
-    if (tipKalan > 0) return null;
-    // Oyuncu aynı tip teklifi reddettiyse:
-    // 1) Tip bazlı global cooldown
-    // 2) Aynı gönderen + tip için ek cooldown
-    const kalan = redCooldownKontrol(owner, hedef, tip);
-    if (kalan > 0) return null;
+  if (!ownerOyundaMi(owner) || !ownerOyundaMi(hedef)) return null;
+  if (hedef === "biz" && (tip === "baris" || tip === "ittifak" || tip === "ticaret" || tip === "tehdit")) {
+    if (tip === "baris" || tip === "ittifak" || tip === "ticaret") {
+      const tipKalan = oyuncuTeklifTipCooldownKalan(tip);
+      if (tipKalan > 0) return null;
+      const kalan = redCooldownKontrol(owner, hedef, tip);
+      if (kalan > 0) return null;
+    }
+    if (tip === "tehdit") {
+      const onKosul = tehditOnKosulKontrol(owner, hedef);
+      if (!onKosul.ok) return null;
+    }
     const teklif = oyuncuyaTeklifOlustur(owner, tip);
     if (!teklif) return null;
     return {
@@ -1484,17 +2035,18 @@ function aiDiplomasiKararlari(messages) {
   const d = diplomasiDurumu();
   if (!d.aiTeklifCooldown || typeof d.aiTeklifCooldown !== "object") d.aiTeklifCooldown = {};
   DIPLO_OWNERLER.filter((id) => id !== "biz").forEach((owner) => {
-    if (!oyun.fraksiyon?.[owner]) return;
+    if (!ownerOyundaMi(owner)) return;
     if (oyun.tur % AI_DIPLO_TUR_ARALIK !== 0) return;
     const cooldownBitis = Number(d.aiTeklifCooldown[owner] || 0);
     if (cooldownBitis > oyun.tur) return;
 
-    const digerleri = DIPLO_OWNERLER.filter((id) => id !== owner);
+    const digerleri = DIPLO_OWNERLER.filter((id) => id !== owner && ownerOyundaMi(id));
+    if (!digerleri.length) return;
     const guc = gucPuani(owner);
     const enTehlikeli = [...digerleri].sort((a, b) => gucPuani(b) - gucPuani(a))[0];
     const zayifHedef = [...digerleri].sort((a, b) => gucPuani(a) - gucPuani(b))[0];
     const para = oyun.fraksiyon[owner].para || 0;
-    const aktifAnlasmaSayisi = ownerAktifAnlasmaSayisi(owner, ["ittifak", "ticaret", "ateskes", "baris"]);
+    const aktifAnlasmaSayisi = ownerAktifAnlasmaSayisi(owner, ["ittifak", "ticaret"]);
     const yeniAnlasmaAcabilir = aktifAnlasmaSayisi < AI_DIPLO_AKTIF_ANLASMA_LIMIT;
 
     let sonuc = null;
@@ -1502,19 +2054,17 @@ function aiDiplomasiKararlari(messages) {
     for (const hedef of digerleri) {
       const iliski = iliskiDegeri(owner, hedef);
       const hedefGuc = Math.max(1, gucPuani(hedef));
-      if (iliski < -50 && guc < hedefGuc * 0.7 && Math.random() < 0.5) {
-        sonuc = aiTeklifDenemesi(owner, hedef, "baris");
-        break;
-      }
-      const savasYorgunlugu =
-        iliski <= -30 &&
-        iliski > -70 &&
-        para < 220 &&
-        guc < hedefGuc * 1.05 &&
-        Math.random() < 0.22;
-      if (savasYorgunlugu) {
-        sonuc = aiTeklifDenemesi(owner, hedef, "baris");
-        break;
+      const savasAktif = savastaMi(owner, hedef);
+      if (savasAktif) {
+        const model = barisKabulModeli(owner, hedef);
+        const gucOrani = guc / hedefGuc;
+        let barisSans = clamp(model.sans, 0.05, 0.9);
+        if (gucOrani < 0.75) barisSans = Math.max(barisSans, 0.6);
+        if (hedef === "biz") barisSans = Math.min(0.94, barisSans + 0.08);
+        if (Math.random() < barisSans) {
+          sonuc = aiTeklifDenemesi(owner, hedef, "baris");
+          if (sonuc) break;
+        }
       }
     }
     if (!sonuc && para < 200 && yeniAnlasmaAcabilir) {
@@ -1699,9 +2249,11 @@ function iliskiTarihceKaydet() {
 export function diplomasiTick() {
   const messages = [];
   diplomasiDurumu();
+  tarafDurumTemizligi(messages);
   bekleyenTeklifleriTemizle();
   zorunluTeklifPopupKontrol(messages);
   iliskiHafizaSolmasi(messages);
+  savasDinamikTick(messages);
   anlasmaBakimVeTemizlik(messages);
   savasBarisKritikBildirimleri(messages);
   koalisyonKontrol(messages);
@@ -1728,47 +2280,52 @@ export function diplomasiTick() {
 export function diplomasiOzet(owner = "biz") {
   const d = diplomasiDurumu();
   const durumRozeti = (hedefOwner) => {
+    if (savastaMi(owner, hedefOwner)) return { tip: "savas", ad: "Savaş" };
     if (ittifakAktifMi(owner, hedefOwner)) return { tip: "ittifak", ad: "İttifak" };
     if (barisAktifMi(owner, hedefOwner)) return { tip: "baris", ad: "Barış" };
     if (ateskesAktifMi(owner, hedefOwner)) return { tip: "ateskes", ad: "Ateşkes" };
-    const iliski = iliskiDegeri(owner, hedefOwner);
-    if (iliski <= -70) return { tip: "savas", ad: "Savaş" };
     return { tip: "normal", ad: "Normal" };
   };
-  const hedefler = DIPLO_OWNERLER.filter((id) => id !== owner).map((id) => {
-    const il = iliskiDurumu(owner, id);
-    const iliskiKey = iliskiAnahtar(owner, id);
-    const tarihce = Array.isArray(d.iliskiTarihce)
-      ? d.iliskiTarihce
-        .slice(-12)
-        .map((row) => ({
-          tur: row.tur,
-          deger: Number(row.iliskiler?.[iliskiKey] ?? il.deger),
-        }))
-      : [];
-    const anlasmalar = aktifAnlasmalar(owner, id).map((a) => ({
-      tip: a.tip,
-      bitis: a.bitis,
-      kalan: Math.max(0, a.bitis - oyun.tur),
-    }));
-    const tehditKey = iliskiAnahtar(owner, id);
-    const tehditKalan = Math.max(0, (d.tehditCooldown?.[tehditKey] || 0) - oyun.tur);
-    return {
-      owner: id,
-      ...il,
-      anlasmalar,
-      tehditKalan,
-      tarihce,
-      durumRozet: durumRozeti(id),
-    };
-  });
+  const hedefler = DIPLO_OWNERLER
+    .filter((id) => id !== owner)
+    .filter((id) => ownerOyundaMi(id))
+    .map((id) => {
+      const il = iliskiDurumu(owner, id);
+      const iliskiKey = iliskiAnahtar(owner, id);
+      const tarihce = Array.isArray(d.iliskiTarihce)
+        ? d.iliskiTarihce
+          .slice(-12)
+          .map((row) => ({
+            tur: row.tur,
+            deger: Number(row.iliskiler?.[iliskiKey] ?? il.deger),
+          }))
+        : [];
+      const anlasmalar = aktifAnlasmalar(owner, id).map((a) => ({
+        tip: a.tip,
+        bitis: a.bitis,
+        kalan: Math.max(0, a.bitis - oyun.tur),
+      }));
+      const tehditKey = iliskiAnahtar(owner, id);
+      const tehditKalan = Math.max(0, (d.tehditCooldown?.[tehditKey] || 0) - oyun.tur);
+      const savasDetay = savasSkorOzeti(owner, id);
+      return {
+        owner: id,
+        ...il,
+        anlasmalar,
+        tehditKalan,
+        tarihce,
+        savasDetay,
+        durumRozet: durumRozeti(id),
+      };
+    });
   const aktifAnlasmaListesi = aktifAnlasmalar()
     .filter((a) => a.taraf1 === owner || a.taraf2 === owner)
     .map((a) => {
       const diger = a.taraf1 === owner ? a.taraf2 : a.taraf1;
-      const kalan = Math.max(0, a.bitis - oyun.tur);
+      const kalan = Number.isFinite(a.bitis) ? Math.max(0, a.bitis - oyun.tur) : null;
+      const sureMetni = Number.isFinite(kalan) ? `${kalan} tur kaldı` : "Süresiz";
       const uyari =
-        (a.tip === "ateskes" || a.tip === "baris")
+        (a.tip === "ateskes" || a.tip === "baris") && Number.isFinite(kalan)
           ? (kalan <= 1 ? "kritik" : (kalan <= 2 ? "uyari" : "normal"))
           : "normal";
       return {
@@ -1776,10 +2333,11 @@ export function diplomasiOzet(owner = "biz") {
         tip: a.tip,
         owner: diger,
         kalan,
+        sureMetni,
         bakim: a.tip === "ittifak" ? DIPLOMASI.ITTIFAK_TUR_MALIYETI : 0,
         ticaretGeliri:
           a.tip === "ticaret"
-            ? Math.round(ownerGelirTabani(owner) * DIPLOMASI.TICARET_GELIR_BONUS)
+            ? ticaretTurModeli(owner, diger).net
             : 0,
         uyari,
       };

@@ -21,7 +21,7 @@ import {
   arastirmaPuanDetayi,
   arastirmaDurumunuDogrula,
 } from "./research.js";
-import { kesifAktifMi, operasyonMumkunMu } from "./spy.js";
+import { kesifAktifMi, operasyonMumkunMu, kesifMaliyeti, suikastMaliyeti } from "./spy.js";
 import { ownerTasit, ownerToplamKapasite, ownerToplamTasit } from "./logistics.js";
 import { diplomasiOzet, iliskiDurumu, isDostIttifak } from "./diplomasi.js";
 
@@ -98,6 +98,69 @@ let profilMenuAcik = false;
 let profilSonAcilanBolgeId = null;
 let profilAcilisTalepBolgeId = null;
 let diploGunlukFiltre = "tum";
+const ARASTIRMA_EFEKT_BILGI = Object.freeze({
+  tetikciMaliyetIndirim: { ad: "Tetikçi maliyet indirimi", tip: "pct" },
+  alimTurKotasiBonus: { ad: "Alım tur kotası", tip: "int" },
+  alimEkMaliyetAzaltma: { ad: "Alım ek maliyet azaltma", tip: "pct" },
+  personelTavanBonus: { ad: "Personel tavanı", tip: "int" },
+  alimSadakatCezaAzaltma: { ad: "Alım sadakat ceza azaltma", tip: "pct" },
+  egitimSureAzaltma: { ad: "Eğitim süresi azaltma", tip: "turn" },
+  garnizonBonus: { ad: "Garnizon bonusu", tip: "pct" },
+  saldiriBonus: { ad: "Saldırı bonusu", tip: "pct" },
+  isyanBastirmaBonus: { ad: "İsyan bastırma bonusu", tip: "pct" },
+  tasitMaliyetIndirim: { ad: "Taşıt maliyet indirimi", tip: "pct" },
+  bakimIndirim: { ad: "Bakım indirimi", tip: "pct" },
+  tasitTavanBonus: { ad: "Taşıt tavanı", tip: "int" },
+  tasitHirsizlikBonus: { ad: "Taşıt hırsızlık bonusu", tip: "pct" },
+  gelirBonus: { ad: "Gelir bonusu", tip: "pct" },
+  haracGelirBonus: { ad: "Haraç gelir bonusu", tip: "pct" },
+  pasifGelir: { ad: "Pasif gelir", tip: "money" },
+  geceEkonomiBonus: { ad: "Gece ekonomi bonusu", tip: "pct" },
+  diplomasiMaliyetIndirim: { ad: "Diplomasi maliyet indirimi", tip: "pct" },
+  olayKontrolBonus: { ad: "Olay kontrol bonusu", tip: "pct" },
+  polisKorumaBonus: { ad: "Polis koruma bonusu", tip: "pct" },
+  kesifBonus: { ad: "Keşif bonusu", tip: "pct" },
+  kesifSureBonus: { ad: "Keşif süresi", tip: "turn" },
+  suikastBonus: { ad: "Suikast bonusu", tip: "pct" },
+  operasyonMaliyetIndirim: { ad: "Operasyon maliyet indirimi", tip: "pct" },
+  polisBaskinRiskAzaltma: { ad: "Polis baskın risk azaltma", tip: "pct" },
+  isyanRiskAzaltma: { ad: "İsyan risk azaltma", tip: "pct" },
+  haracSadakatCezaAzaltma: { ad: "Haraç sadakat ceza azaltma", tip: "pct" },
+  suclulukArtisAzaltma: { ad: "Suçluluk artış azaltma", tip: "pct" },
+  haracPolisArtisAzaltma: { ad: "Haraç polis artış azaltma", tip: "pct" },
+});
+
+function arastirmaEfektParcaMetni(anahtar, deger) {
+  const bilgi = ARASTIRMA_EFEKT_BILGI[anahtar] || { ad: anahtar, tip: "num" };
+  const n = Number(deger);
+  if (!Number.isFinite(n) || n === 0) return "";
+  const isaret = n > 0 ? "+" : "-";
+  const mutlak = Math.abs(n);
+
+  if (bilgi.tip === "pct") {
+    const yuzdeHam = mutlak * 100;
+    const yuzde = yuzdeHam >= 10 ? Math.round(yuzdeHam) : Math.round(yuzdeHam * 10) / 10;
+    return `${bilgi.ad} ${isaret}%${yuzde}`;
+  }
+  if (bilgi.tip === "money") {
+    return `${bilgi.ad} ${isaret}${Math.round(mutlak)}₺/tur`;
+  }
+  if (bilgi.tip === "turn") {
+    return `${bilgi.ad} ${isaret}${Math.round(mutlak)} tur`;
+  }
+  if (bilgi.tip === "int") {
+    return `${bilgi.ad} ${isaret}${Math.round(mutlak)}`;
+  }
+  return `${bilgi.ad} ${isaret}${Math.round(mutlak * 100) / 100}`;
+}
+
+function arastirmaEfektKutuMetni(efekt) {
+  if (!efekt || typeof efekt !== "object") return "";
+  const parcalar = Object.entries(efekt)
+    .map(([anahtar, deger]) => arastirmaEfektParcaMetni(anahtar, deger))
+    .filter(Boolean);
+  return parcalar.join(" • ");
+}
 
 function istanbulDomCacheSifirla() {
   if (istanbulEtiketFitTimer) {
@@ -765,18 +828,25 @@ function haritaContextMenuAc(x, y, bolgeId, onBolgeSec) {
       },
     });
     aksiyonlar.push({
-      etiket: "📍 Toplantı Noktası Yap",
+      etiket: "📍 Toplanma Noktası Ekle/Çıkar",
       calistir: async () => {
         secVeYenile();
         await aktifCallbacklar?.toplantiNoktasiYap?.();
       },
     });
     aksiyonlar.push({
-      etiket: "🚚 Toplantı Noktasına Çağır",
+      etiket: "🚚 Toplanma Noktalarına Çağır",
       calistir: async () => {
         secVeYenile();
         const cagir = aktifCallbacklar?.toplantiNoktasinaCagir || aktifCallbacklar?.toplantiNoktasinaGonder;
         if (typeof cagir === "function") await cagir();
+      },
+    });
+    aksiyonlar.push({
+      etiket: "🧹 Toplanma Noktalarını Sıfırla",
+      calistir: async () => {
+        secVeYenile();
+        await aktifCallbacklar?.toplantiNoktalariSifirla?.();
       },
     });
   }
@@ -1294,12 +1364,16 @@ function arastirmaSayfaIcerikHTML() {
       const ilerleme = hedefHalka ? dalIlerleme(dalId) : acik ? 100 : 0;
       const etiket = acik ? "Açıldı" : hedefHalka ? "Araştırılıyor" : "Kilitli";
       const sinif = acik ? "acik" : hedefHalka ? "hedef" : "kilitli";
+      const efektMetni = arastirmaEfektKutuMetni(seviye.efekt);
       html += `<article class="arastirma-zincir-dugum ${sinif}">
         <div class="arastirma-zincir-ust">
           <span class="arastirma-zincir-ad">${seviye.ad}</span>
           <span class="arastirma-zincir-etiket">${etiket}</span>
         </div>
         <div class="arastirma-zincir-aciklama">${seviye.aciklama}</div>
+        ${efektMetni
+    ? `<div style="font-size:11px;color:#9fd9ff;margin-top:4px">(${htmlEsc(efektMetni)})</div>`
+    : ""}
         <div class="arastirma-cubuk"><div class="arastirma-cubuk-dolgu" style="width:${ilerleme}%"></div></div>
         <div class="arastirma-zincir-puan">${hedefHalka ? `${durum.puan}/${seviye.gerekPuan}` : seviye.gerekPuan} puan</div>
       </article>`;
@@ -1410,6 +1484,7 @@ function bizAlimLimitDurumu() {
   if (oyun.fraksiyon.biz.para <= EKONOMI_DENGE.alimiTurParaCezaEsik) {
     turKotasi -= EKONOMI_DENGE.alimiTurParaCeza;
   }
+  turKotasi += Math.max(0, Math.round(arastirmaEfekt("alimTurKotasiBonus")));
   turKotasi = Math.max(3, turKotasi);
 
   const toplamKapasite = ownerPersonelTavan("biz");
@@ -1432,7 +1507,8 @@ function alimEkMaliyetiUi(adet = 1) {
   const harac = aktifHaracSeviyesiUi();
   const haracCarpani =
     1 + Math.max(0, (harac.gelirCarpani || 1) - 1) * EKONOMI_DENGE.alimiEkMaliyetHaracCarpani;
-  return Math.max(0, Math.round(guvenliAdet * EKONOMI_DENGE.alimiEkMaliyetKisiBasi * haracCarpani));
+  const alimIndirim = Math.max(0, Math.min(0.45, arastirmaEfekt("alimEkMaliyetAzaltma")));
+  return Math.max(0, Math.round(guvenliAdet * EKONOMI_DENGE.alimiEkMaliyetKisiBasi * haracCarpani * (1 - alimIndirim)));
 }
 
 // Net gelir hesaplama (üst bar için)
@@ -1635,10 +1711,10 @@ export function diplomasiCiz(cb) {
       const ekBilgi = a.tip === "ittifak"
         ? `Bakım: ${a.bakim}₺/tur`
         : a.tip === "ticaret"
-          ? `Gelir: +${a.ticaretGeliri}₺/tur`
+          ? `Net: ${a.ticaretGeliri >= 0 ? "+" : ""}${a.ticaretGeliri}₺/tur`
           : "";
       html += `<div style="margin-top:6px;font-size:11px;color:${uyariRenk}">
-        ${diploAnlasmaEtiketi(a.tip)} · ${ownerAd} · ${a.kalan} tur kaldı ${ekBilgi ? `| ${ekBilgi}` : ""}
+        ${diploAnlasmaEtiketi(a.tip)} · ${ownerAd} · ${a.sureMetni || `${a.kalan} tur kaldı`} ${ekBilgi ? `| ${ekBilgi}` : ""}
       </div>`;
     });
   }
@@ -1663,9 +1739,11 @@ export function diplomasiCiz(cb) {
   html += `<details style="margin:0 0 10px 0;padding:8px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(10,16,24,.45)">
     <summary style="cursor:pointer;font-size:12px;color:#c9d8e7"><strong>Diplomasi Koşul Tablosu</strong></summary>
     <div style="margin-top:8px;font-size:11px;color:#9eb1c5;line-height:1.45">
-      Ateşkes teklifi: ilişki ≤ -30.<br>
-      Barış anlaşması: ilişki ≤ -50.<br>
-      Normalleşme: -30 ile 0 arası.<br>
+      Barış teklifi: savaşta skor/yorgunluk durumuna göre kabul edilir.<br>
+      Savaş durumu: savaş ilanı veya saldırı ile başlar.<br>
+      Savaşın bitişi: barış teklifinin kabulü veya tarafın dağılması.<br>
+      Uzayan savaşta yorgunluk artar, barış eğilimi yükselir.<br>
+      Ateşkes: süreli bir durumdur (tehdit/özel olay kaynaklı olabilir).<br>
       İttifak teklifi: ilişki ≥ +30.<br>
       Savaş ilanı: tüm aktif anlaşmaları bozar ve ihanet sayılabilir.
     </div>
@@ -1684,6 +1762,13 @@ export function diplomasiCiz(cb) {
           .map((a) => `<span class="diplo-anlasma">${diploAnlasmaEtiketi(a.tip)} · ${a.kalan}t</span>`)
           .join("")
       : `<span style="font-size:11px;color:#8899ad">Aktif anlaşma yok</span>`;
+    const savasDetaySatiri = h.savasDetay
+      ? `<div style="font-size:11px;color:#ffb8b8;margin:4px 0 2px 0">
+          Savaş skoru: Sen ${Math.round(h.savasDetay.skor.biz)} | ${ad} ${Math.round(h.savasDetay.skor[h.owner] || 0)}
+          &nbsp; · &nbsp; Yorgunluk: Sen ${Math.round(h.savasDetay.yorgunluk.biz)} | ${ad} ${Math.round(h.savasDetay.yorgunluk[h.owner] || 0)}
+          &nbsp; · &nbsp; Barış kabul tahmini: %${Math.round(h.savasDetay.barisTeklifSans.biz || 0)}
+        </div>`
+      : "";
     const rozetRenk =
       h.durumRozet?.tip === "ittifak" ? "#8ef1b6"
         : h.durumRozet?.tip === "baris" ? "#7ec7ff"
@@ -1707,6 +1792,7 @@ export function diplomasiCiz(cb) {
           &nbsp; <span>${trend.ozet}</span>
         </div>
         <div style="margin:4px 0 6px 0">${diploMiniGrafikSVG(h.tarihce)}</div>
+        ${savasDetaySatiri}
         <div>${anlasmaSatiri}</div>
         ${h.tehditKalan > 0 ? `<div style="font-size:11px;color:#c0a27a">Tehdit bekleme: ${h.tehditKalan} tur</div>` : ""}
         <div class="diplo-btn-grid">
@@ -2034,13 +2120,14 @@ export function durumCiz() {
   const ilAi1 = iliskiDurumu("biz", "ai1");
   const ilAi2 = iliskiDurumu("biz", "ai2");
   const ilAi3 = iliskiDurumu("biz", "ai3");
+  const bizBirlikToplam = ownerToplamPersonel("biz");
   const bizLojistikKapasite = ownerToplamKapasite("biz");
   const bizLojistikKullanim = oyun.birimler
     .filter((k) => k.owner === "biz" && !k._sil && ((k.tasitAraba || 0) > 0 || (k.tasitMotor || 0) > 0))
     .reduce((toplam, k) => toplam + ((k.tasitAraba || 0) * 4) + ((k.tasitMotor || 0) * 2), 0);
   const bizLojistikKalan = Math.max(0, bizLojistikKapasite - bizLojistikKullanim);
   const bizTasit = ownerTasit("biz");
-  const lojistikBaslik = `Filo: 🚗 ${bizTasit.araba || 0} • 🏍️ ${bizTasit.motor || 0} • Kalan kapasite: ${bizLojistikKalan}`;
+  const lojistikBaslik = `Birlik: ${bizBirlikToplam} • Filo: 🚗 ${bizTasit.araba || 0} • 🏍️ ${bizTasit.motor || 0} • Kalan kapasite: ${bizLojistikKalan}`;
   const lojistikKullanimMetni = bizLojistikKullanim > 0
     ? ` <span style="color:#f7b267">(-${bizLojistikKullanim})</span>`
     : "";
@@ -2048,6 +2135,7 @@ export function durumCiz() {
     <span class="etiket">Çetemiz:</span> <span id="biz-adi">${biz.ad}</span>
     &nbsp; | &nbsp; <span class="etiket">Lider:</span> ${lider ? liderProfilAdSatiriHTML(lider, 20) : '—'}
     &nbsp; | &nbsp; <span class="etiket">Para:</span> ${Math.floor(biz.para)} ₺
+    &nbsp; | &nbsp; <span class="etiket">Birlik:</span> ${bizBirlikToplam}
     &nbsp; | &nbsp; <span class="etiket" title="${lojistikBaslik}">Lojistik:</span> ${bizLojistikKapasite}${lojistikKullanimMetni}
     ${yaraliToplam > 0 ? `&nbsp; | &nbsp; <span style="color:#f39c12">🩹 ${yaraliToplam}</span>` : ''}
     ${esirToplam > 0 ? `&nbsp; | &nbsp; <span style="color:#e74c3c">⛓️ ${esirToplam}</span>` : ''}
@@ -2708,11 +2796,29 @@ export function islemlerCiz(cb) {
   if (oyun.seciliId && sonSeciliBolgeId !== oyun.seciliId) {
     sonSeciliBolgeId = oyun.seciliId;
   }
-  const toplantiAdayi = bolgeById(oyun.toplantiNoktasi?.biz ?? null);
-  const bizToplantiBolge = toplantiAdayi && toplantiAdayi.owner === "biz" ? toplantiAdayi : null;
-  if (!bizToplantiBolge && oyun.toplantiNoktasi?.biz !== null && oyun.toplantiNoktasi?.biz !== undefined) {
-    oyun.toplantiNoktasi.biz = null;
+  if (!oyun.toplantiNoktasi || typeof oyun.toplantiNoktasi !== "object") {
+    oyun.toplantiNoktasi = { biz: [], ai1: [], ai2: [], ai3: [] };
   }
+  const hamToplanti = oyun.toplantiNoktasi.biz;
+  const toplantiAdaylari = Array.isArray(hamToplanti)
+    ? hamToplanti
+    : (hamToplanti !== null && hamToplanti !== undefined ? [hamToplanti] : []);
+  const toplantiIdMap = new Map();
+  toplantiAdaylari.forEach((hamId) => {
+    const direkt = bolgeById(hamId);
+    const cozulmus = direkt || oyun.bolgeler.find((x) => String(x?.id) === String(hamId));
+    if (!cozulmus || cozulmus.owner !== "biz") return;
+    toplantiIdMap.set(String(cozulmus.id), cozulmus.id);
+  });
+  const bizToplantiBolgeIdleri = [...toplantiIdMap.values()];
+  oyun.toplantiNoktasi.biz = bizToplantiBolgeIdleri;
+  const bizToplantiBolgeler = bizToplantiBolgeIdleri
+    .map((id) => bolgeById(id))
+    .filter((x) => !!x && x.owner === "biz");
+  const bizToplantiSeciliMi = b.owner === "biz" && bizToplantiBolgeler.some((x) => String(x.id) === String(b.id));
+  const bizToplantiMetin = bizToplantiBolgeler.length
+    ? bizToplantiBolgeler.map((x) => x.ad).join(", ")
+    : "Yok";
 
   let html = `<h3>${b.ad} – İşlemler</h3>`;
   if (b.owner === 'biz') {
@@ -2730,12 +2836,15 @@ export function islemlerCiz(cb) {
           <button class="buton" id="btn-hareket-emri">Hareket Emri (Gönder → Hedef Seç)</button>
         </div>
         <div class="btn-grid" style="margin-top:8px">
-          <button class="buton grimsi" id="btn-toplanti-yap">📍 Toplantı Noktası Yap</button>
-          <button class="buton grimsi" id="btn-toplanti-cagir" ${bizToplantiBolge ? "" : "disabled"}>
+          <button class="buton grimsi" id="btn-toplanti-yap">📍 ${bizToplantiSeciliMi ? "Toplanma Noktasından Çıkar" : "Toplanma Noktası Ekle"}</button>
+          <button class="buton grimsi" id="btn-toplanti-cagir" ${bizToplantiBolgeler.length ? "" : "disabled"}>
             🚚 Toplantı Noktasına Çağır
           </button>
+          <button class="buton grimsi" id="btn-toplanti-sifirla" ${bizToplantiBolgeler.length ? "" : "disabled"}>
+            🧹 Toplanma Noktalarını Sıfırla
+          </button>
         </div>
-        <p class="ipucu">Aktif toplantı noktası: <strong>${bizToplantiBolge ? bizToplantiBolge.ad : "Yok"}</strong></p>
+        <p class="ipucu">Aktif toplanma noktaları: <strong>${bizToplantiMetin}</strong></p>
         <div class="btn-grid" style="margin-top:8px">
           <button class="buton" id="btn-sohret5">Şöhret +5</button>
           <button class="buton" id="btn-sohret10">Şöhret +10</button>
@@ -2792,6 +2901,7 @@ export function islemlerCiz(cb) {
     const bh = document.getElementById("btn-hareket-emri");
     const bt = document.getElementById("btn-toplanti-yap");
     const btc = document.getElementById("btn-toplanti-cagir");
+    const bts = document.getElementById("btn-toplanti-sifirla");
     const bs5 = document.getElementById("btn-sohret5");
     const bs10 = document.getElementById("btn-sohret10");
     if (g1) g1.onclick = cb.yatirimGelir;
@@ -2802,6 +2912,9 @@ export function islemlerCiz(cb) {
     if (btc) {
       const cagir = cb.toplantiNoktasinaCagir || cb.toplantiNoktasinaGonder;
       if (typeof cagir === "function") btc.onclick = () => cagir();
+    }
+    if (bts && typeof cb.toplantiNoktalariSifirla === "function") {
+      bts.onclick = () => cb.toplantiNoktalariSifirla();
     }
     if (bs5) bs5.onclick = () => cb.sohretSatinAl(5);
     if (bs10) bs10.onclick = () => cb.sohretSatinAl(10);
@@ -2844,9 +2957,9 @@ export function islemlerCiz(cb) {
 
   // Birim satın alma butonları
   document.querySelectorAll(".btn-birim-al").forEach((btn) => {
-    btn.onclick = () => {
+    btn.onclick = (e) => {
       const tip = btn.getAttribute("data-tip");
-      cb.birimSatinAl(tip);
+      cb.birimSatinAl(tip, { shift5: !!e.shiftKey });
     };
   });
   document.querySelectorAll(".btn-tasit-al").forEach((btn) => {
@@ -2899,9 +3012,11 @@ function birimSatinAlPanelHTML() {
   const limit = bizAlimLimitDurumu();
   const kisiBasiAlimGideri = alimEkMaliyetiUi(1);
   const toplamTasitKapasite = ownerToplamKapasite("biz");
+  const tasitTavanBonus = Math.max(0, Math.round(arastirmaEfekt("tasitTavanBonus")));
+  const tasitMaliyetIndirim = Math.max(0, Math.min(0.45, arastirmaEfekt("tasitMaliyetIndirim")));
   const tasitKapasiteUstSinir = Math.max(
     20,
-    Math.round(bizToplamPersonelUi() * 1.1 + oyun.bolgeler.filter((x) => x.owner === "biz").length * 10)
+    Math.round(bizToplamPersonelUi() * 1.1 + oyun.bolgeler.filter((x) => x.owner === "biz").length * 10 + tasitTavanBonus)
   );
   let html = `<hr><h4>🪖 Birlik Satın Al</h4>
     <div style="font-size:11px;color:#9fb3c5;margin-bottom:6px">
@@ -2922,7 +3037,7 @@ function birimSatinAlPanelHTML() {
     </button>`;
   });
   html += `</div><p class="ipucu" style="font-size:11px">
-    Hiyerarşi: Genç → Tetikçi → Uzman → Ağır Silahlı • Bu tur kalan alım: ${limit.alinabilir}
+    Hiyerarşi: Genç → Tetikçi → Uzman → Ağır Silahlı • Tıkla=1, Shift+Tık=5 • Bu tur kalan alım: ${limit.alinabilir}
   </p>`;
   html += `<hr><h4>💸 Haraç Politikası</h4>
     <div class="btn-grid">`;
@@ -2944,15 +3059,16 @@ function birimSatinAlPanelHTML() {
   html += `<hr><h4>🚚 Taşıt Lojistiği</h4>
     <div style="font-size:12px;color:#aaa;margin-bottom:6px">
       Filo: ${bizTasit.araba} 🚗, ${bizTasit.motor} 🏍️
-      <br>Toplam kapasite: ${toplamTasitKapasite}/${tasitKapasiteUstSinir}
+      <br>Toplam kapasite: ${toplamTasitKapasite}/${tasitKapasiteUstSinir}${tasitTavanBonus > 0 ? ` (Araştırma +${tasitTavanBonus})` : ""}
     </div>
     <div class="btn-grid">`;
   Object.entries(TASIT_TIPLERI).forEach(([tipKey, t]) => {
-    const yeterli = oyun.fraksiyon.biz.para >= t.maliyet;
+    const maliyet = Math.max(1, Math.ceil(t.maliyet * (1 - tasitMaliyetIndirim)));
+    const yeterli = oyun.fraksiyon.biz.para >= maliyet;
     html += `<button class="buton grimsi btn-tasit-al" data-tip="${tipKey}"
       ${yeterli ? "" : "disabled"}
       title="${t.ad} • Kapasite +${t.kapasite} • Bakım ${t.bakim.toFixed(2)}">
-      ${t.ikon} ${t.ad} [${t.maliyet}₺]
+      ${t.ikon} ${t.ad} [${maliyet}₺]
     </button>`;
   });
   html += `</div><p class="ipucu" style="font-size:11px">
@@ -3019,6 +3135,8 @@ function binaPanelHTML(bolge) {
 function casuslukPanelHTML(hedefId) {
   const tasit = ownerToplamTasit("biz");
   const kapasite = ownerToplamKapasite("biz");
+  const kesifCost = kesifMaliyeti("biz");
+  const suikastCost = suikastMaliyeti("biz");
   const kesifUygun = operasyonMumkunMu(hedefId, "kesif");
   const suikastUygun = operasyonMumkunMu(hedefId, "suikast");
   const hedef = bolgeById(hedefId);
@@ -3033,13 +3151,13 @@ function casuslukPanelHTML(hedefId) {
     <div class="btn-grid">
       <button class="buton grimsi btn-kesif" id="btn-kesif"
         ${kesifUygun ? "" : "disabled"}
-        title="1 ekip + 2 kişilik taşıt kapasitesi + 100₺ — Başarıda kayıp yok">
-        🔍 Keşif [100₺]${kesifAktif ? " ✓" : ""}
+        title="1 ekip + 2 kişilik taşıt kapasitesi + dinamik maliyet — Başarıda kayıp yok">
+        🔍 Keşif [${kesifCost}₺]${kesifAktif ? " ✓" : ""}
       </button>
       <button class="buton tehlike btn-suikast" id="btn-suikast"
         ${suikastUygun && !liderDevreDisi ? "" : "disabled"}
-        title="2 ekip + 4 kişilik taşıt kapasitesi + 300₺ — Başarıda kayıp yok">
-        🗡️ Suikast [300₺]${liderDevreDisi ? " (devre dışı)" : ""}
+        title="2 ekip + 4 kişilik taşıt kapasitesi + dinamik maliyet — Başarıda kayıp yok">
+        🗡️ Suikast [${suikastCost}₺]${liderDevreDisi ? " (devre dışı)" : ""}
       </button>
     </div>`;
   return html;

@@ -2,6 +2,7 @@ import {
   BASLANGIC_FRAKSIYONLAR,
   liderlerArasiBaslangicIliski,
   EKONOMI_DENGE,
+  DIPLOMASI,
 } from "./config.js";
 import { SOHRET } from "./config.js";
 import { istanbulBolgelerOlustur, istanbulKomsuOlustur } from "./istanbul.js";
@@ -112,6 +113,8 @@ export function yeniDiplomasiDurumu(fraksiyonlar = null) {
     tehditCooldown: {},
     aiTeklifCooldown: {},
     redCooldown: {},
+    savasDurumu: {},
+    savasKayit: {},
     oyuncuTeklifTipCooldown: {},
     bekleyenTeklifler: [],
     koalisyon: null,
@@ -136,7 +139,34 @@ export function diplomasiDurumuTamamla(diplomasi, fraksiyonlar = oyun?.fraksiyon
     const v = Number(iliskiler[key]);
     iliskiler[key] = Number.isFinite(v) ? Math.max(-100, Math.min(100, Math.round(v * 10) / 10)) : 0;
   });
-  const anlasmalar = Array.isArray(d.anlasmalar) ? d.anlasmalar.filter(Boolean) : [];
+  const anlasmalar = Array.isArray(d.anlasmalar)
+    ? d.anlasmalar
+      .filter(Boolean)
+      .map((a) => {
+        const tip = String(a.tip || "");
+        const meta = (a.meta && typeof a.meta === "object") ? { ...a.meta } : {};
+        const kaliciBaris = tip === "baris";
+        if (kaliciBaris) meta.kalici = true;
+        else if (tip === "ateskes") delete meta.kalici;
+        const varsayilanSure =
+          tip === "ateskes" ? Number(DIPLOMASI.ATESKES_SURESI || 0)
+            : tip === "ittifak" ? Number(DIPLOMASI.ITTIFAK_SURESI || 0)
+              : tip === "ticaret" ? Number(DIPLOMASI.TICARET_SURESI || 0)
+                : 0;
+        const baslangic = Number.isFinite(a.baslangic) ? a.baslangic : 0;
+        const bitis =
+          kaliciBaris
+            ? null
+            : Number.isFinite(a.bitis)
+              ? a.bitis
+              : (varsayilanSure > 0 ? baslangic + varsayilanSure : oyun.tur);
+        return {
+          ...a,
+          bitis,
+          meta,
+        };
+      })
+    : [];
   const olayGunlugu = Array.isArray(d.olayGunlugu) ? d.olayGunlugu.filter(Boolean).slice(-DIPLO_LOG_LIMIT) : [];
   const iliskiTarihce = Array.isArray(d.iliskiTarihce)
     ? d.iliskiTarihce
@@ -149,6 +179,15 @@ export function diplomasiDurumuTamamla(diplomasi, fraksiyonlar = oyun?.fraksiyon
     ? { ...d.aiTeklifCooldown }
     : {};
   const redCooldown = (d.redCooldown && typeof d.redCooldown === "object") ? { ...d.redCooldown } : {};
+  const savasDurumu = (d.savasDurumu && typeof d.savasDurumu === "object")
+    ? { ...d.savasDurumu }
+    : {};
+  Object.keys(savasDurumu).forEach((key) => {
+    if (!savasDurumu[key]) delete savasDurumu[key];
+  });
+  const savasKayit = (d.savasKayit && typeof d.savasKayit === "object")
+    ? { ...d.savasKayit }
+    : {};
   const oyuncuTeklifTipCooldown = (d.oyuncuTeklifTipCooldown && typeof d.oyuncuTeklifTipCooldown === "object")
     ? { ...d.oyuncuTeklifTipCooldown }
     : {};
@@ -211,6 +250,8 @@ export function diplomasiDurumuTamamla(diplomasi, fraksiyonlar = oyun?.fraksiyon
     tehditCooldown,
     aiTeklifCooldown,
     redCooldown,
+    savasDurumu,
+    savasKayit,
     oyuncuTeklifTipCooldown,
     bekleyenTeklifler,
     koalisyon: d.koalisyon && typeof d.koalisyon === "object" ? { ...d.koalisyon } : null,
@@ -234,7 +275,7 @@ export const oyun = {
   hizKatsayi: 1.0,
   sohret: { biz: 0, ai1: 0, ai2: 0, ai3: 0 },
   hareketEmri: null, // {owner:'biz', kaynakId: number, adet: number}
-  toplantiNoktasi: { biz: null, ai1: null, ai2: null, ai3: null },
+  toplantiNoktasi: { biz: [], ai1: [], ai2: [], ai3: [] },
   operasyonlar: [],
 
   // --- yeni: hareketli birlikler ---
@@ -252,8 +293,12 @@ export const oyun = {
   arastirma: {
     aktifDal: "org",
     org:         { seviye: 0, puan: 0 },
+    taktik:      { seviye: 0, puan: 0 },
+    lojistik:    { seviye: 0, puan: 0 },
     ekonomi:     { seviye: 0, puan: 0 },
+    finans:      { seviye: 0, puan: 0 },
     istihbarat:  { seviye: 0, puan: 0 },
+    propaganda:  { seviye: 0, puan: 0 },
   },
   asayis: {
     sucluluk: 0,
@@ -295,7 +340,7 @@ export function yeniOyun({ zorluk, mapSize, baslangicKonumlari = null, fraksiyon
   oyun.birimler = [];
   oyun.birimSayac = 1;
   oyun.hareketEmri = null;
-  oyun.toplantiNoktasi = { biz: null, ai1: null, ai2: null, ai3: null };
+  oyun.toplantiNoktasi = { biz: [], ai1: [], ai2: [], ai3: [] };
   oyun.operasyonlar = [];
   // Yeni sistemler
   oyun.gorevler = { aktif: [], tamamlanan: [] };
@@ -306,9 +351,13 @@ export function yeniOyun({ zorluk, mapSize, baslangicKonumlari = null, fraksiyon
   oyun.ekonomiKpi = { hedefTurlar: [20, 40, 60], kayitlar: [] };
   oyun.arastirma = {
     aktifDal: "org",
-    org:        { seviye: 0, puan: 0 },
-    ekonomi:    { seviye: 0, puan: 0 },
-    istihbarat: { seviye: 0, puan: 0 },
+    org:         { seviye: 0, puan: 0 },
+    taktik:      { seviye: 0, puan: 0 },
+    lojistik:    { seviye: 0, puan: 0 },
+    ekonomi:     { seviye: 0, puan: 0 },
+    finans:      { seviye: 0, puan: 0 },
+    istihbarat:  { seviye: 0, puan: 0 },
+    propaganda:  { seviye: 0, puan: 0 },
   };
   oyun.asayis = {
     sucluluk: 0,

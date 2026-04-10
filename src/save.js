@@ -104,8 +104,12 @@ function oyunDurumuNormallestir(yuklenenOyun) {
     yuklenenOyun.arastirma = {
       aktifDal: "org",
       org: { seviye: 0, puan: 0 },
+      taktik: { seviye: 0, puan: 0 },
+      lojistik: { seviye: 0, puan: 0 },
       ekonomi: { seviye: 0, puan: 0 },
+      finans: { seviye: 0, puan: 0 },
       istihbarat: { seviye: 0, puan: 0 },
+      propaganda: { seviye: 0, puan: 0 },
     };
   }
   if (!yuklenenOyun.asayis || typeof yuklenenOyun.asayis !== "object") {
@@ -129,19 +133,28 @@ function oyunDurumuNormallestir(yuklenenOyun) {
     : {};
   if (!yuklenenOyun.toplantiNoktasi || typeof yuklenenOyun.toplantiNoktasi !== "object") {
     yuklenenOyun.toplantiNoktasi = {
-      biz: eskiToplanma.biz ?? null,
-      ai1: eskiToplanma.ai1 ?? null,
-      ai2: eskiToplanma.ai2 ?? null,
-      ai3: eskiToplanma.ai3 ?? null,
+      biz: eskiToplanma.biz ?? [],
+      ai1: eskiToplanma.ai1 ?? [],
+      ai2: eskiToplanma.ai2 ?? [],
+      ai3: eskiToplanma.ai3 ?? [],
     };
   }
-  const aktifBolgeIdleri = new Set((yuklenenOyun.bolgeler || []).map((b) => String(b?.id)));
+  const bolgeIdHaritasi = new Map(
+    (yuklenenOyun.bolgeler || []).map((b) => [String(b?.id), b?.id])
+  );
   ["biz", "ai1", "ai2", "ai3"].forEach((owner) => {
-    const secili = yuklenenOyun.toplantiNoktasi?.[owner];
-    yuklenenOyun.toplantiNoktasi[owner] =
-      secili !== null && secili !== undefined && aktifBolgeIdleri.has(String(secili))
-        ? secili
-        : null;
+    const ham = yuklenenOyun.toplantiNoktasi?.[owner];
+    const adaylar = Array.isArray(ham)
+      ? ham
+      : (ham !== null && ham !== undefined ? [ham] : []);
+    const temizMap = new Map();
+    adaylar.forEach((id) => {
+      if (id === null || id === undefined) return;
+      const cozulmus = bolgeIdHaritasi.get(String(id));
+      if (cozulmus === null || cozulmus === undefined) return;
+      temizMap.set(String(cozulmus), cozulmus);
+    });
+    yuklenenOyun.toplantiNoktasi[owner] = [...temizMap.values()];
   });
   if (Object.prototype.hasOwnProperty.call(yuklenenOyun, "toplanma")) delete yuklenenOyun.toplanma;
   yuklenenOyun.ekonomi = ekonomiDurumuTamamla(yuklenenOyun.ekonomi);
