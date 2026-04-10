@@ -995,6 +995,7 @@ export function aiKoordineliSaldiriDegerlendirYap(aiOwner) {
   for (const partner of partnerAdaylari) {
     const ortakHedefler = oyun.bolgeler
       .filter((b) => b.owner !== aiOwner && b.owner !== partner && b.owner !== "tarafsiz")
+      .filter((b) => diplomasiSaldiriMumkunMu(aiOwner, b.owner) && diplomasiSaldiriMumkunMu(partner, b.owner))
       .filter((b) => (oyun.komsu[b.id] || []).some((id) => bolgeById(id)?.owner === aiOwner))
       .filter((b) => (oyun.komsu[b.id] || []).some((id) => bolgeById(id)?.owner === partner))
       .sort((a, b) => (b.gelir || 0) - (a.gelir || 0));

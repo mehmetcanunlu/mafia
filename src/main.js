@@ -4,6 +4,7 @@ import {
   haritaCiz,
   uiGuncel,
   durumCiz,
+  ustPanelOyunButonlariniBagla,
   isimModalGoster,
   isimModalBagla,
   isimModalKapat,
@@ -62,6 +63,15 @@ document.addEventListener("ui:guncel", () => {
   ensureGameControls();
 });
 
+document.addEventListener("ui:modal-pause", () => {
+  try {
+    durumCiz();
+    ustPanelOyunButonlariniBagla(callbacklar);
+  } catch (e) {
+    console.error("[ui:modal-pause]", e);
+  }
+});
+
 function konvoyTasitIade(konvoy) {
   const araba = konvoy?.tasitAraba || 0;
   const motor = konvoy?.tasitMotor || 0;
@@ -84,15 +94,23 @@ function diploPopupKuyrugaEkle(olay) {
   const baslik = typeof olay === "object" ? (olay.baslik || "Diplomasi") : "Diplomasi";
   popupKuyrugaEkle(async () => {
     if (typeof olay === "object" && olay.teklifId) {
-      const kabul = await showConfirm(metin, baslik);
-      const sonuc = diplomasiTeklifYanitla(olay.teklifId, !!kabul);
-      if (sonuc?.mesaj && /(ittifak|koalisyon|m[üu]dahale|savaş|barış|ateskes|ticaret)/i.test(sonuc.mesaj)) {
-        logYaz(`🤝 ${sonuc.mesaj}`);
+      try {
+        const kabul = await showConfirm(metin, baslik, { oyunuDuraklat: true });
+        const sonuc = diplomasiTeklifYanitla(String(olay.teklifId), !!kabul);
+        if (
+          sonuc?.mesaj &&
+          /(ittifak|koalisyon|m[üu]dahale|savaş|barış|ateskes|ticaret|teklif)/i.test(sonuc.mesaj)
+        ) {
+          logYaz(`🤝 ${sonuc.mesaj}`);
+        }
+      } catch (err) {
+        console.error("[diploPopup] teklif yaniti", olay?.teklifId, err);
+        logYaz(`⚠️ Diplomasi yanıtı işlenemedi (konsola bakın).`);
       }
       uiGuncel(callbacklar);
       return;
     }
-    await showAlert(metin, baslik);
+    await showAlert(metin, baslik, { oyunuDuraklat: true });
   });
 }
 
@@ -376,6 +394,20 @@ function operasyonTick() {
 
     const hepsiHazir = op.katilimcilar.every((kat) => kat.hazir);
     if (!hepsiHazir) return;
+
+    const hedefBolgeOp = bolgeById(op.hedefId);
+    const hedefOwnerOp = hedefBolgeOp?.owner;
+    if (
+      hedefOwnerOp &&
+      op.katilimcilar.some((kat) => kat?.owner && !diplomasiSaldiriMumkunMi(kat.owner, hedefOwnerOp))
+    ) {
+      operasyonSerbestBirak(
+        op,
+        "iptal",
+        "🕊️ Koordineli saldırı (barış/ateşkes) hedef ile anlaşma nedeniyle iptal edildi."
+      );
+      return;
+    }
 
     op.katilimcilar.forEach((kat) => {
       (kat.konvoyIdler || []).forEach((kid) => {
@@ -774,6 +806,28 @@ function hareketTick() {
 
     const grup = koordineliSaldiriGrubu(k, varanlar);
     if (grup.length > 1) {
+      if (grup.some((g) => !diplomasiSaldiriMumkunMu(g.owner, hedef.owner))) {
+        const opId = grup[0]?.operasyonId;
+        const op = opId ? oyun.operasyonlar.find((o) => o.id === opId) : null;
+        if (op) {
+          operasyonSerbestBirak(
+            op,
+            "iptal",
+            "🕊️ Koordineli saldırı barış / ateşkes nedeniyle iptal edildi."
+          );
+        }
+        grup.forEach((g) => {
+          if (g._islendi) return;
+          logYaz(
+            `${oyun.fraksiyon[g.owner]?.ad || g.owner} koordineli birlikleri ${hedef.ad} önünde anlaşma nedeniyle durdu.`
+          );
+          yiginaEkle(g.konumId, g.owner, g.adet, g.tip || "tetikci", { tavanUygula: false });
+          konvoyTasitIade(g);
+          g._islendi = true;
+          g._sil = true;
+        });
+        continue;
+      }
       koordineliSavasCoz(grup, hedef);
       continue;
     }
@@ -970,11 +1024,37 @@ function hareketTick() {
   uiGuncel(callbacklar);
 }
 
+/** Tam ekran modal / bitiş / tutorial açıkken tur ilerlemesin (duraklat bayrağı kaymış olsa bile). */
+function tamEkranPanelAcikMi() {
+  const flex = (id) => document.getElementById(id)?.style?.display === "flex";
+  return (
+    flex("cm-arka") ||
+    flex("isim-arka") ||
+    flex("bitis-overlay") ||
+    flex("tutorial-arka")
+  );
+}
+
 function dongu() {
-  if (!oyun.duraklat) {
-    turIsle();
+  try {
+    const panelAcik = tamEkranPanelAcikMi();
+    if (!oyun.duraklat && !panelAcik) {
+      turIsle();
+    }
+  } catch (err) {
+    console.error("[dongu] turIsle", err);
+    oyun.duraklat = true;
+    try {
+      logYaz(
+        `Tur işlenirken hata oluştu; oyun duraklatıldı: ${err?.message || String(err)}. ` +
+          `"Devam Et" ile sürdürmeyi dene; sorun sürerse sayfayı yenile.`
+      );
+    } catch (_) {
+      /* log paneli yoksa yut */
+    }
+    uiGuncel(callbacklar);
   }
-  // hız = temel_sure / hizKatsayi (alt sınır 50ms)
+  // hız = temel_sure / hizKatsayi (alt sınır 50ms) — her durumda zincir devam etsin
   const gecikme = Math.max(
     50,
     Math.round(AYAR.turSuresiMs / (oyun.hizKatsayi || 1))
@@ -1034,8 +1114,6 @@ function oyunKurulumunuBaslat(kurulum, seciliBaslangicId = null) {
   uiGuncel(callbacklar);
   ensureGameControls();
 
-  oyun.duraklat = false;
-  durumCiz();
   operasyonTick();
   hareketTick();
   setTimeout(() => tutorialBaslat(), 120);
@@ -1512,6 +1590,10 @@ function turIsle() {
     if (!metin || metin.includes("hafıza")) return;
 
     if (olay.popup) {
+      // Teklif penceresi kuyrukta beklerken tur işlenmesin; aksi halde koalisyon nesnesi kaybolup kabul/ret boşa düşüyordu.
+      if (typeof olay === "object" && olay.teklifId) {
+        oyun.duraklat = true;
+      }
       diploPopupKuyrugaEkle({
         ...olay,
         metin,
@@ -1748,12 +1830,10 @@ function isimAkisi() {
     document.getElementById("efs-ai2").textContent = oyun.fraksiyon.ai2?.ad || "AI2";
     document.getElementById("efs-ai3").textContent = oyun.fraksiyon.ai3?.ad || "AI3";
 
-    durumCiz();
+    oyun.duraklat = true;
     haritaCiz(onBolgeSec);
     uiGuncel(callbacklar);
     ensureGameControls();
-    oyun.duraklat = false;
-    durumCiz();
     setTimeout(() => tutorialBaslat(), 120);
   });
 

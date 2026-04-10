@@ -1094,7 +1094,7 @@ function haritaModSec(mod, sessiz = false) {
   if (svg) svg.setAttribute("data-mod", mod);
   haritaGuncel();
   durumCiz();
-  haritaModUstKontrolBagla();
+  ustPanelOyunButonlariniBagla(aktifCallbacklar);
   if (!sessiz) logYaz(`🗺️ Harita modu: ${HARITA_MODLARI[mod].ad}`);
 }
 
@@ -1759,7 +1759,13 @@ export function diplomasiCiz(cb) {
     const trend = diploTrendMetni(h.tarihce);
     const anlasmaSatiri = h.anlasmalar.length
       ? h.anlasmalar
-          .map((a) => `<span class="diplo-anlasma">${diploAnlasmaEtiketi(a.tip)} · ${a.kalan}t</span>`)
+          .map((a) => {
+            const sure =
+              a.kalan === null || a.kalan === undefined || Number.isNaN(a.kalan)
+                ? "süresiz"
+                : `${a.kalan}t`;
+            return `<span class="diplo-anlasma">${diploAnlasmaEtiketi(a.tip)} · ${sure}</span>`;
+          })
           .join("")
       : `<span style="font-size:11px;color:#8899ad">Aktif anlaşma yok</span>`;
     const savasDetaySatiri = h.savasDetay
@@ -1773,8 +1779,9 @@ export function diplomasiCiz(cb) {
       h.durumRozet?.tip === "ittifak" ? "#8ef1b6"
         : h.durumRozet?.tip === "baris" ? "#7ec7ff"
           : h.durumRozet?.tip === "ateskes" ? "#f7d794"
-            : h.durumRozet?.tip === "savas" ? "#ff9f9f"
-              : "#9fb3c8";
+            : h.durumRozet?.tip === "savas-baris-bekliyor" ? "#f7b267"
+              : h.durumRozet?.tip === "savas" ? "#ff9f9f"
+                : "#9fb3c8";
     html += `
       <section class="diplo-satir">
         <div class="diplo-ust">
@@ -2610,25 +2617,13 @@ export function haritaGuncel() {
     }
   });
 }
-export function uiGuncel(cb) {
-  aktifCallbacklar = cb;
-  haritaContextMenuKapat();
-  durumCiz();
-  haritaGuncel();
-  detayCiz();
-  islemlerCiz(cb);
-  diplomasiCiz(cb);
 
-  // İstatistik panelini göster (oyun başladıysa)
-  const statPanel = document.getElementById("istatistik-panel");
-  if (statPanel && oyun.tur > 0) {
-    istatistikGrafik();
-  }
-
-  sagSekmeleriBagla();
-  sagSekmeAyarla(aktifSagSekme);
-
-  // Pause bağla
+/** durumCiz() üst çubuğu yeniledikten sonra pause / tutorial / ayarlar tıklamalarını yeniden bağlar. */
+export function ustPanelOyunButonlariniBagla(cb) {
+  if (!cb) return;
+  ensureAyarModal();
+  ensureProfilYanMenu();
+  ensureArastirmaSayfa();
   const pauseBtn = document.getElementById("pause-btn");
   if (pauseBtn) pauseBtn.onclick = cb.duraklatDevam;
   const tutorialBtn = document.getElementById("tutorial-btn");
@@ -2638,11 +2633,6 @@ export function uiGuncel(cb) {
     };
   }
   haritaModUstKontrolBagla();
-
-  // Ayarlar modalı hazırla + bağla
-  ensureAyarModal();
-  ensureProfilYanMenu();
-  ensureArastirmaSayfa();
   const arastirmaBtn = document.getElementById("arastirma-sayfa-btn");
   if (arastirmaBtn) arastirmaBtn.onclick = arastirmaSayfaAc;
   const arastirmaBtnPanel = document.getElementById("btn-arastirma-sayfa");
@@ -2664,6 +2654,27 @@ export function uiGuncel(cb) {
       };
     };
   }
+}
+
+export function uiGuncel(cb) {
+  aktifCallbacklar = cb;
+  haritaContextMenuKapat();
+  durumCiz();
+  haritaGuncel();
+  detayCiz();
+  islemlerCiz(cb);
+  diplomasiCiz(cb);
+
+  // İstatistik panelini göster (oyun başladıysa)
+  const statPanel = document.getElementById("istatistik-panel");
+  if (statPanel && oyun.tur > 0) {
+    istatistikGrafik();
+  }
+
+  sagSekmeleriBagla();
+  sagSekmeAyarla(aktifSagSekme);
+
+  ustPanelOyunButonlariniBagla(cb);
 
   const seciliProfilBolge = bolgeById(oyun.seciliId);
   if (seciliProfilBolge && seciliProfilBolge.owner !== "tarafsiz") {
