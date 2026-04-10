@@ -75,6 +75,8 @@ export const DIPLOMASI = {
   IHANET_ITIBAR_KAYBI: 20,
   GUC_ESIGI_KOALISYON: 0.5,
   KOALISYON_SALDIRI_BONUS: 0.1,
+  /** Aynı koalisyon için ardışık davetler arası minimum tur (üst üste pencere önleme) */
+  KOALISYON_DAVET_TUR_ARALIK: 22,
   ITTIFAK_SALDIRI_BONUS: 0.15,
   TEHDIT_BEKLEME: 12,
   ILISKI_HAFIZA_SOLMASI: 0.5,

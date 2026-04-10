@@ -1,5 +1,7 @@
 // Custom Modal ve Toast sistemi — Faz 3
 
+import { oyun } from "./state.js";
+
 function ensureContainers() {
   if (!document.getElementById('cm-arka')) {
     const arka = document.createElement('div');
@@ -29,8 +31,11 @@ function showModal({ html, escValue, bagla }) {
 
     let cleanup = null;
     let escHandler = null;
+    let kapandi = false;
 
     function kapat(val) {
+      if (kapandi) return;
+      kapandi = true;
       if (typeof cleanup === 'function') cleanup();
       if (escHandler) document.removeEventListener('keydown', escHandler);
       kutu.classList.remove('cm-acik');
@@ -51,7 +56,16 @@ function showModal({ html, escValue, bagla }) {
   });
 }
 
-export function showAlert(mesaj, baslik = 'Bilgi') {
+/** Sadece açıkça istenirse (ör. düşman diplo bildirimi) oyunu duraklatır. */
+function oyunuDuraklatModalIcin(secenekler) {
+  if (!secenekler?.oyunuDuraklat) return;
+  if (!oyun || oyun.duraklat) return;
+  oyun.duraklat = true;
+  document.dispatchEvent(new CustomEvent("ui:modal-pause"));
+}
+
+export function showAlert(mesaj, baslik = 'Bilgi', secenekler = {}) {
+  oyunuDuraklatModalIcin(secenekler);
   return showModal({
     html: `
       <div class="cm-baslik">${baslik}</div>
@@ -69,6 +83,7 @@ export function showAlert(mesaj, baslik = 'Bilgi') {
 export function showConfirm(mesaj, baslik = 'Onay', secenekler = {}) {
   const ekButonEtiketi = secenekler?.ekButonEtiketi || '';
   const ekButonDegeri = secenekler?.ekButonDegeri || 'extra';
+  oyunuDuraklatModalIcin(secenekler);
   return showModal({
     html: `
       <div class="cm-baslik">${baslik}</div>

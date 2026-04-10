@@ -118,6 +118,8 @@ export function yeniDiplomasiDurumu(fraksiyonlar = null) {
     oyuncuTeklifTipCooldown: {},
     bekleyenTeklifler: [],
     koalisyon: null,
+    /** Koalisyon nesnesi tur içinde null olsa bile (eşik altı vb.) kabul edilmiş üyeliği hatırla */
+    dengeKoalisyonuOyuncuUyesi: false,
     ittifakMudahaleKuyrugu: [],
     kritikBildirim: {
       savasDurumu: {},
@@ -200,7 +202,8 @@ export function diplomasiDurumuTamamla(diplomasi, fraksiyonlar = oyun?.fraksiyon
         tip: String(t.tip || ""),
         gonderen: String(t.gonderen || ""),
         hedef: String(t.hedef || ""),
-        durum: t.durum === "beklemede" ? "beklemede" : "sonuclandi",
+        // Açıkça "sonuclandi" değilse beklemede say (undefined kayıt/tekliflerin her tur silinmesini önler).
+        durum: t.durum === "sonuclandi" ? "sonuclandi" : "beklemede",
         tur: Number.isFinite(t.tur) ? t.tur : 0,
         bitis: Number.isFinite(t.bitis) ? t.bitis : null,
         meta: (t.meta && typeof t.meta === "object") ? { ...t.meta } : {},
@@ -254,7 +257,14 @@ export function diplomasiDurumuTamamla(diplomasi, fraksiyonlar = oyun?.fraksiyon
     savasKayit,
     oyuncuTeklifTipCooldown,
     bekleyenTeklifler,
-    koalisyon: d.koalisyon && typeof d.koalisyon === "object" ? { ...d.koalisyon } : null,
+    koalisyon:
+      d.koalisyon && typeof d.koalisyon === "object"
+        ? {
+            ...d.koalisyon,
+            uyeler: Array.isArray(d.koalisyon.uyeler) ? [...d.koalisyon.uyeler] : [],
+          }
+        : null,
+    dengeKoalisyonuOyuncuUyesi: !!d.dengeKoalisyonuOyuncuUyesi,
     ittifakMudahaleKuyrugu,
     kritikBildirim,
     oyuncuAksiyon,
