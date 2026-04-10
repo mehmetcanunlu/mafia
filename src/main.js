@@ -1192,9 +1192,30 @@ async function onBolgeSec(id, secimOps = {}) {
     hareketEmriHedefSec(id);
     return;
   }
+
+  if (secimOps?.contextmenu) {
+    const profilAcilisTalebi = hedef.owner !== "tarafsiz";
+    profilSolMenuAcilisTalebiAyarla(profilAcilisTalebi ? hedef.id : null);
+    oyun.seciliId = hedef.id;
+    uiGuncel(callbacklar);
+    return;
+  }
+
   const ikinciTikAynıBolge = !!(oncekiSecili && oncekiSecili.id === hedef.id);
-  const profilAcilisTalebi = ikinciTikAynıBolge && !secimOps?.shiftKey && hedef.owner !== "tarafsiz";
-  profilSolMenuAcilisTalebiAyarla(profilAcilisTalebi ? hedef.id : null);
+  if (ikinciTikAynıBolge && !secimOps?.shiftKey && hedef.owner === "biz" && !oyun.hareketEmri) {
+    profilSolMenuAcilisTalebiAyarla(null);
+    oyun.seciliId = hedef.id;
+    if (typeof callbacklar.hareketEmriKaynakSec === "function") {
+      await callbacklar.hareketEmriKaynakSec(hedef.id);
+      return;
+    }
+    if (typeof callbacklar.hareketEmriBaslat === "function") {
+      await callbacklar.hareketEmriBaslat();
+      return;
+    }
+  }
+
+  profilSolMenuAcilisTalebiAyarla(null);
   oyun.seciliId = hedef.id;
   uiGuncel(callbacklar);
 }

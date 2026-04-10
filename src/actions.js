@@ -4,7 +4,7 @@ import { AYAR, SOHRET, BINA_TIPLERI, DIPLOMASI, MEKANIK, EKONOMI_DENGE } from ".
 import { saldiriMaliyeti } from "./combat.js";
 import { sohretCarpani } from "./state.js";
 import { yiginaEkle } from "./state.js";
-import { showAlert, showConfirm, showPrompt } from "./modal.js";
+import { showAlert, showConfirm, showPrompt, showRangePrompt } from "./modal.js";
 import { BIRIM_TIPLERI, TASIT_TIPLERI } from "./units.js";
 import { kesifYap, suikastYap, suikastMaliyeti } from "./spy.js";
 import { arastirmaEfekt } from "./research.js";
@@ -87,6 +87,29 @@ function lojistikKapasiteMetni(owner, gereken = 0) {
     `Kullanım: ${guvenliGereken}/${kapasite.toplam} • Kalan: ${kalan >= 0 ? kalan : 0}\n` +
     `${tasitStokMetni(owner)}`
   );
+}
+
+async function birlikAdediSliderSec({
+  baslik = "Birlik Seçimi",
+  mesaj = "",
+  maksimum = 0,
+  varsayilan = maksimum,
+} = {}) {
+  const max = Math.max(0, Math.floor(Number(maksimum) || 0));
+  if (max <= 0) return null;
+  const secilen = await showRangePrompt({
+    baslik,
+    mesaj,
+    min: 1,
+    max,
+    varsayilan: Math.min(max, Math.max(1, Math.floor(Number(varsayilan) || max))),
+    step: 1,
+    birim: "birlik",
+  });
+  if (secilen === null) return null;
+  const adet = Math.floor(Number(secilen) || 0);
+  if (!Number.isFinite(adet) || adet < 1 || adet > max) return null;
+  return adet;
 }
 
 function rotaDostTransitVarMi(owner, rota = []) {
@@ -1131,8 +1154,8 @@ export async function koordineliSaldiriBaslat() {
   uiGuncel(callbacklar);
 }
 
-export async function hareketEmriBaslat() {
-  const secili = bolgeById(oyun.seciliId);
+export async function hareketEmriKaynakSec(kaynakId = oyun.seciliId) {
+  const secili = bolgeById(kaynakId);
   if (!secili || secili.owner !== "biz") {
     await showAlert("Kendi kontrolündeki bir bölgeyi seçmelisin.");
     return;
@@ -1143,21 +1166,25 @@ export async function hareketEmriBaslat() {
     return;
   }
 
-  const girdi = await showPrompt(
-    `Kaç adam göndereceksin?\nKaynak: ${secili.ad}\nKaynak hazır birlik: ${mevcut}\n` +
-    `Toplam hazır birlik: ${ownerHazirToplam("biz")}\n${lojistikKapasiteMetni("biz")}`,
-    'Hareket Emri'
-  );
-  if (girdi === null) return;
-  const adet = parseInt(girdi, 10);
-  if (isNaN(adet) || adet <= 0 || adet > mevcut) {
-    await showAlert("Geçersiz sayı.");
+  const adet = await birlikAdediSliderSec({
+    baslik: "Hareket Emri",
+    mesaj:
+      `Kaynak: ${secili.ad}\nKaynak hazır birlik: ${mevcut}\n` +
+      `Toplam hazır birlik: ${ownerHazirToplam("biz")}\n${lojistikKapasiteMetni("biz")}`,
+    maksimum: mevcut,
+    varsayilan: mevcut,
+  });
+  if (adet === null) {
     return;
   }
 
   oyun.hareketEmri = { owner: "biz", kaynakId: secili.id, adet };
   logYaz(`${secili.ad} → (hedef seç) [${adet}]`);
   uiGuncel(callbacklar);
+}
+
+export async function hareketEmriBaslat() {
+  await hareketEmriKaynakSec(oyun.seciliId);
 }
 
 function toplantiNoktasiDurumuGetir(owner = "biz") {
@@ -1367,18 +1394,15 @@ export async function hizliTransferSeciliBolgeden(hedefId) {
     return;
   }
 
-  const varsayilan = Math.min(mevcut, Math.max(1, Math.floor(mevcut * 0.5)));
-  const girdi = await showPrompt(
-    `${kaynak.ad} → ${hedef.ad}\nKaç birlik gönderilsin?\nKaynak hazır birlik: ${mevcut}\n` +
-    `Toplam hazır birlik: ${ownerHazirToplam("biz")}\n${lojistikKapasiteMetni("biz")}`,
-    "Hızlı Transfer",
-    String(varsayilan)
-  );
-  if (girdi === null) return;
-
-  const adet = parseInt(girdi, 10);
-  if (!Number.isFinite(adet) || adet <= 0 || adet > mevcut) {
-    await showAlert("Geçersiz birlik sayısı.");
+  const adet = await birlikAdediSliderSec({
+    baslik: "Hızlı Transfer",
+    mesaj:
+      `${kaynak.ad} → ${hedef.ad}\nKaynak hazır birlik: ${mevcut}\n` +
+      `Toplam hazır birlik: ${ownerHazirToplam("biz")}\n${lojistikKapasiteMetni("biz")}`,
+    maksimum: mevcut,
+    varsayilan: mevcut,
+  });
+  if (adet === null) {
     return;
   }
 
@@ -1440,6 +1464,23 @@ export async function hareketEmriHedefSec(hedefId) {
     uiGuncel(callbacklar);
     return;
   }
+  const turSur = Math.max(1, rota.length - 1);
+  const rotaOzet = rota
+    .map((id) => bolgeById(id)?.ad || String(id))
+    .join(" → ");
+  const ilerlemeOnay = await showConfirm(
+    `${kaynak.ad} → ${hedef.ad}\n` +
+    `Gönderilecek: ${emir.adet} birlik\n` +
+    `Tahmini varış: ~${turSur} tur\n` +
+    `Lojistik: ${tasitPlanMetni(tasitPlan)}\n` +
+    `Rota: ${rotaOzet}\n` +
+    `İlerleme başlangıcı: %0`,
+    "Hareket İlerleme Planı"
+  );
+  if (!ilerlemeOnay) {
+    uiGuncel(callbacklar);
+    return;
+  }
 
   const cekim = bolgedenBirlikCek("biz", kaynak.id, emir.adet);
   if (!cekim) {
@@ -1479,7 +1520,6 @@ export async function hareketEmriHedefSec(hedefId) {
   }
 
   oyun.hareketEmri = null;
-  const turSur = rota.length - 1;
   logYaz(
     `${kaynak.ad} → ${hedef.ad} (${emir.adet}) yola çıktı (${tasitPlanMetni(ayrilanTasit)}, varış ~${turSur} tur).`
   );
@@ -2135,6 +2175,7 @@ export const callbacklar = {
   hareketEmriSaldiriBaslat,
   koordineliSaldiriBaslat,
   hareketEmriBaslat,
+  hareketEmriKaynakSec,
   toplantiNoktasiYap,
   toplantiNoktalariSifirla,
   toplantiNoktasinaCagir,
