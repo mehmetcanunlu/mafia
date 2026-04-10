@@ -124,6 +124,7 @@ export function yeniDiplomasiDurumu(fraksiyonlar = null) {
     kritikBildirim: {
       savasDurumu: {},
       anlasmaKalan: {},
+      anlasmaSonBittiUyari: {},
     },
     oyuncuAksiyon: {
       tur: -1,
@@ -149,21 +150,28 @@ export function diplomasiDurumuTamamla(diplomasi, fraksiyonlar = oyun?.fraksiyon
         const meta = (a.meta && typeof a.meta === "object") ? { ...a.meta } : {};
         const kaliciBaris = tip === "baris";
         if (kaliciBaris) meta.kalici = true;
-        else if (tip === "ateskes") delete meta.kalici;
+        else delete meta.kalici;
         const varsayilanSure =
           tip === "ateskes" ? Number(DIPLOMASI.ATESKES_SURESI || 0)
             : tip === "ittifak" ? Number(DIPLOMASI.ITTIFAK_SURESI || 0)
               : tip === "ticaret" ? Number(DIPLOMASI.TICARET_SURESI || 0)
                 : 0;
-        const baslangic = Number.isFinite(a.baslangic) ? a.baslangic : 0;
-        const bitis =
-          kaliciBaris
-            ? null
-            : Number.isFinite(a.bitis)
-              ? a.bitis
-              : (varsayilanSure > 0 ? baslangic + varsayilanSure : oyun.tur);
+        const baslangicRaw = Number(a.baslangic);
+        const baslangic = Number.isFinite(baslangicRaw) ? baslangicRaw : oyun.tur;
+        const bitisSayi = Number(a.bitis);
+        let bitis;
+        if (kaliciBaris) {
+          bitis = null;
+        } else if (Number.isFinite(bitisSayi)) {
+          bitis = bitisSayi;
+        } else if (varsayilanSure > 0) {
+          bitis = baslangic + varsayilanSure;
+        } else {
+          bitis = oyun.tur;
+        }
         return {
           ...a,
+          baslangic,
           bitis,
           meta,
         };
@@ -233,6 +241,10 @@ export function diplomasiDurumuTamamla(diplomasi, fraksiyonlar = oyun?.fraksiyon
     anlasmaKalan:
       (kritikBildirimKaydi.anlasmaKalan && typeof kritikBildirimKaydi.anlasmaKalan === "object")
         ? { ...kritikBildirimKaydi.anlasmaKalan }
+        : {},
+    anlasmaSonBittiUyari:
+      (kritikBildirimKaydi.anlasmaSonBittiUyari && typeof kritikBildirimKaydi.anlasmaSonBittiUyari === "object")
+        ? { ...kritikBildirimKaydi.anlasmaSonBittiUyari }
         : {},
   };
   const oyuncuAksiyon = (d.oyuncuAksiyon && typeof d.oyuncuAksiyon === "object")

@@ -1807,7 +1807,7 @@ export function diplomasiCiz(cb) {
         <div style="margin:4px 0 6px 0">${diploMiniGrafikSVG(h.tarihce)}</div>
         ${savasDetaySatiri}
         <div>${anlasmaSatiri}</div>
-        ${h.tehditKalan > 0 ? `<div style="font-size:11px;color:#c0a27a">Tehdit bekleme: ${h.tehditKalan} tur</div>` : ""}
+        ${h.tehditKalan > 0 ? `<div style="font-size:11px;color:#c0a27a" title="Aynı hedefe tekrar ültimatom için">Tehdit bekleme (aynı hedef): ${h.tehditKalan} tur</div>` : ""}
         <div class="diplo-btn-grid">
           <button class="buton grimsi btn-diplo-baris" data-owner="${h.owner}" ${aksiyonKilitli ? "disabled" : ""}>Barış</button>
           <button class="buton grimsi btn-diplo-savas" data-owner="${h.owner}" ${aksiyonKilitli ? "disabled" : ""}>Savaş İlanı</button>
