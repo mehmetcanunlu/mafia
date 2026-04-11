@@ -645,10 +645,19 @@ function anlasmaTaraflariAyniMi(anlasma, a, b) {
   );
 }
 
+/** Yalnızca kalıcı barış süresiz sayılır; ateşkes/ittifak/ticarette eksik bitis “sonsuz” yapılmaz (UI ve bakım tutarsızlığını önler). */
+function anlasmaSuresizBarisMi(anlasma) {
+  const tip = String(anlasma?.tip || "");
+  if (tip !== "baris") return false;
+  if (anlasma?.meta?.kalici) return true;
+  return anlasma.bitis === null || anlasma.bitis === undefined;
+}
+
 function aktifAnlasmaFiltre(anlasma) {
   if (!anlasma) return false;
-  if (anlasma?.meta?.kalici || anlasma.bitis === null || anlasma.bitis === undefined) return true;
-  return Number.isFinite(anlasma.bitis) && anlasma.bitis >= oyun.tur;
+  if (anlasmaSuresizBarisMi(anlasma)) return true;
+  const b = Number(anlasma.bitis);
+  return Number.isFinite(b) && b >= oyun.tur;
 }
 
 /** Aktif barış/ateşkes varken kalan savaş bayrağı / savaş kaydı tutarsızlığını giderir. */
@@ -1677,32 +1686,58 @@ function tarafDurumTemizligi(messages) {
 
 function anlasmaBakimVeTemizlik(messages) {
   const d = diplomasiDurumu();
+  if (!d.kritikBildirim || typeof d.kritikBildirim !== "object") {
+    d.kritikBildirim = { savasDurumu: {}, anlasmaKalan: {}, anlasmaSonBittiUyari: {} };
+  }
+  const sonBittiUyari = d.kritikBildirim.anlasmaSonBittiUyari;
+  if (!sonBittiUyari || typeof sonBittiUyari !== "object") {
+    d.kritikBildirim.anlasmaSonBittiUyari = {};
+  }
+  const bittiUyariKayit = d.kritikBildirim.anlasmaSonBittiUyari;
+
   const kalan = [];
   d.anlasmalar.forEach((a) => {
     if (!a) return;
-    const kalici = !!a?.meta?.kalici || a.bitis === null || a.bitis === undefined;
-    if (!kalici && a.bitis < oyun.tur) {
-      const oyuncuyuIlgilendirir = a.taraf1 === "biz" || a.taraf2 === "biz";
-      if (oyuncuyuIlgilendirir) {
-        const metin = `${ownerAd(a.taraf1)} ↔ ${ownerAd(a.taraf2)} (${a.tip}) anlaşması sona erdi.`;
-        if (a.tip === "baris" || a.tip === "ateskes") {
-          messages.push({
-            metin,
-            popup: true,
-            log: true,
-            baslik: a.tip === "baris" ? "Barış Bitti" : "Ateşkes Bitti",
-          });
-        } else {
-          messages.push(metin);
-        }
+    const tip = String(a.tip || "");
+    const barisSuresiz = anlasmaSuresizBarisMi(a);
+    if (!barisSuresiz) {
+      const b = Number(a.bitis);
+      if (!Number.isFinite(b)) {
+        diploKayitEkle(
+          "anlasma-bozuk-bitis",
+          `${ownerAd(a.taraf1)} ↔ ${ownerAd(a.taraf2)} (${tip}) anlaşması geçersiz bitiş tarihi nedeniyle kaldırıldı.`,
+          "bilgi",
+          { taraflar: [a.taraf1, a.taraf2] }
+        );
+        return;
       }
-      diploKayitEkle(
-        "anlasma-bitti",
-        `${ownerAd(a.taraf1)} ↔ ${ownerAd(a.taraf2)} (${a.tip}) süresi doldu.`,
-        "bilgi",
-        { taraflar: [a.taraf1, a.taraf2] }
-      );
-      return;
+      if (b < oyun.tur) {
+        const uyariAnahtar = `${a.id || `${iliskiAnahtar(a.taraf1, a.taraf2)}-${tip}`}|${b}`;
+        const oyuncuyuIlgilendirir = a.taraf1 === "biz" || a.taraf2 === "biz";
+        if (!bittiUyariKayit[uyariAnahtar]) {
+          bittiUyariKayit[uyariAnahtar] = oyun.tur;
+          if (oyuncuyuIlgilendirir) {
+            const metin = `${ownerAd(a.taraf1)} ↔ ${ownerAd(a.taraf2)} (${a.tip}) anlaşması sona erdi.`;
+            if (a.tip === "baris" || a.tip === "ateskes") {
+              messages.push({
+                metin,
+                popup: true,
+                log: true,
+                baslik: a.tip === "baris" ? "Barış Bitti" : "Ateşkes Bitti",
+              });
+            } else {
+              messages.push(metin);
+            }
+          }
+          diploKayitEkle(
+            "anlasma-bitti",
+            `${ownerAd(a.taraf1)} ↔ ${ownerAd(a.taraf2)} (${a.tip}) süresi doldu.`,
+            "bilgi",
+            { taraflar: [a.taraf1, a.taraf2] }
+          );
+        }
+        return;
+      }
     }
     if (a.tip === "ittifak") {
       const odeme1 = oyun.fraksiyon?.[a.taraf1]?.para ?? 0;
@@ -1805,7 +1840,7 @@ function anlasmaBakimVeTemizlik(messages) {
 function savasBarisKritikBildirimleri(messages) {
   const d = diplomasiDurumu();
   if (!d.kritikBildirim || typeof d.kritikBildirim !== "object") {
-    d.kritikBildirim = { savasDurumu: {}, anlasmaKalan: {} };
+    d.kritikBildirim = { savasDurumu: {}, anlasmaKalan: {}, anlasmaSonBittiUyari: {} };
   }
   const takip = d.kritikBildirim;
   const savasTablosu = (d.savasDurumu && typeof d.savasDurumu === "object")
@@ -1849,11 +1884,13 @@ function savasBarisKritikBildirimleri(messages) {
 
   const aktifAnlasmaIdleri = new Set();
   aktifBarisAnlasmalari.forEach((a) => {
-    if (!a?.id || !Number.isFinite(a.bitis)) return;
-    aktifAnlasmaIdleri.add(a.id);
-    const kalanTur = Math.max(0, Math.round(a.bitis - oyun.tur));
-    const oncekiKalan = Number.isFinite(takip.anlasmaKalan[a.id]) ? takip.anlasmaKalan[a.id] : null;
-    if ((kalanTur === 2 || kalanTur === 1) && oncekiKalan !== kalanTur) {
+    const bitisN = Number(a?.bitis);
+    if (!Number.isFinite(bitisN)) return;
+    const anahtar = a.id || `${iliskiAnahtar(a.taraf1, a.taraf2)}-${a.tip}`;
+    aktifAnlasmaIdleri.add(anahtar);
+    const kalanTur = Math.max(0, Math.round(bitisN - oyun.tur));
+    const oncekiKalan = Number.isFinite(takip.anlasmaKalan[anahtar]) ? takip.anlasmaKalan[anahtar] : null;
+    if ((kalanTur === 3 || kalanTur === 2 || kalanTur === 1) && oncekiKalan !== kalanTur) {
       const digerOwner = a.taraf1 === "biz" ? a.taraf2 : a.taraf1;
       const tipAd = a.tip === "baris" ? "Barış" : "Ateşkes";
       messages.push({
@@ -1863,7 +1900,7 @@ function savasBarisKritikBildirimleri(messages) {
         baslik: `${tipAd} Uyarısı`,
       });
     }
-    takip.anlasmaKalan[a.id] = kalanTur;
+    takip.anlasmaKalan[anahtar] = kalanTur;
   });
 
   Object.keys(takip.anlasmaKalan).forEach((id) => {
