@@ -56,17 +56,46 @@ function showModal({ html, escValue, bagla }) {
   });
 }
 
-/** Sadece açıkça istenirse (ör. düşman diplo bildirimi) oyunu duraklatır. */
+/**
+ * Sadece açıkça istenirse (ör. diplo teklifi) oyunu duraklatır.
+ * @returns {boolean} Bu çağrıda duraklatma açıldıysa true; zaten duraklattıysa false (kapanınca otomatik devam etme).
+ */
 function oyunuDuraklatModalIcin(secenekler) {
-  if (!secenekler?.oyunuDuraklat) return;
-  if (!oyun || oyun.duraklat) return;
+  if (!secenekler?.oyunuDuraklat) return false;
+  if (!oyun || oyun.duraklat) return false;
   oyun.duraklat = true;
   document.dispatchEvent(new CustomEvent("ui:modal-pause"));
+  return true;
+}
+
+/**
+ * Otomatik devamı microtask'a erteler: await sonrası diplomasiTeklifYanitla / uiGuncel
+ * bittikten sonra çalışsın (finally ile aynı turda önce duraklat kalkıp teklif işlenmeden tur tetiklenmesini önler).
+ */
+function modalKapanincaOtomatikDevamEt(modalBuAcilistaDuraklatti, promise) {
+  if (!modalBuAcilistaDuraklatti) return promise;
+  const devam = () => {
+    queueMicrotask(() => {
+      if (!oyun) return;
+      oyun.duraklat = false;
+      document.dispatchEvent(new CustomEvent("ui:modal-unpause"));
+    });
+  };
+  return promise.then(
+    (val) => {
+      devam();
+      return val;
+    },
+    (err) => {
+      devam();
+      throw err;
+    }
+  );
 }
 
 export function showAlert(mesaj, baslik = 'Bilgi', secenekler = {}) {
-  oyunuDuraklatModalIcin(secenekler);
-  return showModal({
+  const modalBuAcilistaDuraklatti = oyunuDuraklatModalIcin(secenekler);
+  return modalKapanincaOtomatikDevamEt(modalBuAcilistaDuraklatti, showModal({
     html: `
       <div class="cm-baslik">${baslik}</div>
       <div class="cm-icerik">${mesaj}</div>
@@ -77,14 +106,14 @@ export function showAlert(mesaj, baslik = 'Bilgi', secenekler = {}) {
     bagla(kutu, kapat) {
       kutu.querySelector('.cm-tamam').onclick = () => kapat(undefined);
     }
-  });
+  }));
 }
 
 export function showConfirm(mesaj, baslik = 'Onay', secenekler = {}) {
   const ekButonEtiketi = secenekler?.ekButonEtiketi || '';
   const ekButonDegeri = secenekler?.ekButonDegeri || 'extra';
-  oyunuDuraklatModalIcin(secenekler);
-  return showModal({
+  const modalBuAcilistaDuraklatti = oyunuDuraklatModalIcin(secenekler);
+  return modalKapanincaOtomatikDevamEt(modalBuAcilistaDuraklatti, showModal({
     html: `
       <div class="cm-baslik">${baslik}</div>
       <div class="cm-icerik">${mesaj}</div>
@@ -111,7 +140,7 @@ export function showConfirm(mesaj, baslik = 'Onay', secenekler = {}) {
       document.addEventListener('keydown', enterHandler);
       return () => document.removeEventListener('keydown', enterHandler);
     }
-  });
+  }));
 }
 
 export function showPrompt(mesaj, baslik = 'Giriş', varsayilan = '') {
