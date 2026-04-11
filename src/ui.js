@@ -98,6 +98,10 @@ let profilMenuAcik = false;
 let profilSonAcilanBolgeId = null;
 let profilAcilisTalepBolgeId = null;
 let diploGunlukFiltre = "tum";
+
+export function askeriHaritaModuAktifMi() {
+  return aktifHaritaModu === "askeri";
+}
 const ARASTIRMA_EFEKT_BILGI = Object.freeze({
   tetikciMaliyetIndirim: { ad: "Tetikçi maliyet indirimi", tip: "pct" },
   alimTurKotasiBonus: { ad: "Alım tur kotası", tip: "int" },
@@ -2722,7 +2726,7 @@ export function detayCiz() {
       <p>Haritadan bir bölge seçerek detay açabilirsin.</p>
       <p><strong>Çete:</strong> ${htmlEsc(biz?.ad || "Biz")}</p>
       <p><strong>Bölge:</strong> ${bizBolge} • <strong>Birim:</strong> ${bizBirim} • <strong>Para:</strong> ${Math.round(biz?.para || 0)} ₺</p>
-      <p class="ipucu">Sahipli bir bölgeye sağ tıkla: solda lider profili/özelleştirme açılır. Kendi bölgene ikinci tık: hareket için birlik seçimi.</p>
+      <p class="ipucu">Sahipli bir bölgeye sağ tıkla: solda lider profili/özelleştirme açılır. Askeri harita modunda kendi bölgene ikinci tık: hareket için birlik seçimi.</p>
     `;
     return;
   }

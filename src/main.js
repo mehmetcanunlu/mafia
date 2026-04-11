@@ -11,6 +11,7 @@ import {
   logYaz,
   bitisBanner,
   profilSolMenuAcilisTalebiAyarla,
+  askeriHaritaModuAktifMi,
 } from "./ui.js";
 import { callbacklar, asayisTick } from "./actions.js";
 import {
@@ -1171,6 +1172,10 @@ async function onBolgeSec(id, secimOps = {}) {
     oncekiSecili.id !== hedef.id &&
     !oyun.hareketEmri
   ) {
+    if (!askeriHaritaModuAktifMi()) {
+      await showAlert("Hızlı transfer için önce haritayı Askeri moda al.");
+      return;
+    }
     profilSolMenuAcilisTalebiAyarla(null);
     oyun.seciliId = oncekiSecili.id;
     if (typeof callbacklar.hizliTransferSeciliBolgeden === "function") {
@@ -1188,6 +1193,10 @@ async function onBolgeSec(id, secimOps = {}) {
 
   // Bekleyen hareket emri varsa tıklanan bölgeyi hedef olarak işle.
   if (oyun.hareketEmri) {
+    if (!askeriHaritaModuAktifMi()) {
+      await showAlert("Asker gönderme hedefi seçmek için önce haritayı Askeri moda al.");
+      return;
+    }
     profilSolMenuAcilisTalebiAyarla(null);
     hareketEmriHedefSec(id);
     return;
@@ -1202,7 +1211,13 @@ async function onBolgeSec(id, secimOps = {}) {
   }
 
   const ikinciTikAynıBolge = !!(oncekiSecili && oncekiSecili.id === hedef.id);
-  if (ikinciTikAynıBolge && !secimOps?.shiftKey && hedef.owner === "biz" && !oyun.hareketEmri) {
+  if (
+    ikinciTikAynıBolge &&
+    !secimOps?.shiftKey &&
+    hedef.owner === "biz" &&
+    !oyun.hareketEmri &&
+    askeriHaritaModuAktifMi()
+  ) {
     profilSolMenuAcilisTalebiAyarla(null);
     oyun.seciliId = hedef.id;
     if (typeof callbacklar.hareketEmriKaynakSec === "function") {
