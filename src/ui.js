@@ -1678,10 +1678,11 @@ export function diplomasiCiz(cb) {
 
   if (ozet.koalisyon?.hedef) {
     const hedefAd = oyun.fraksiyon?.[ozet.koalisyon.hedef]?.ad || ozet.koalisyon.hedef;
-    const uyeler = Array.isArray(ozet.koalisyon.uyeler) ? ozet.koalisyon.uyeler : [];
-    const uyeAdlari = uyeler.map((id) => oyun.fraksiyon?.[id]?.ad || id).join(", ") || "—";
+    const uyelerHam = Array.isArray(ozet.koalisyon.uyeler) ? [...ozet.koalisyon.uyeler] : [];
+    if (ozet.koalisyon.bizKatilim && !uyelerHam.includes("biz")) uyelerHam.push("biz");
+    const uyeAdlari = uyelerHam.map((id) => oyun.fraksiyon?.[id]?.ad || id).join(", ") || "—";
     const benHedefim = ozet.koalisyon.hedef === "biz";
-    const benUyeyim = uyeler.includes("biz");
+    const benUyeyim = uyelerHam.includes("biz") || !!ozet.koalisyon.bizKatilim;
     html += `
       <div style="margin:0 0 10px 0;padding:8px;border:1px solid ${benHedefim ? "rgba(255,122,122,.4)" : "rgba(120,180,255,.35)"};border-radius:8px;background:${benHedefim ? "rgba(86,18,18,.28)" : "rgba(16,28,48,.45)"}">
         <strong style="font-size:12px;color:${benHedefim ? "#ffb4b4" : "#b8d8ff"}">${benHedefim ? "🚨 Koalisyon Seni Hedefliyor" : "⚡ Denge Koalisyonu Aktif"}</strong>

@@ -392,7 +392,7 @@ function teklifGetiriGoturuMetni(tip, gonderen, hedef = "biz") {
 function oyuncuyaBekleyenTeklifVarMi() {
   const d = diplomasiDurumu();
   if (!Array.isArray(d.bekleyenTeklifler)) d.bekleyenTeklifler = [];
-  return d.bekleyenTeklifler.some((t) => t?.hedef === "biz" && t?.durum === "beklemede");
+  return d.bekleyenTeklifler.some((t) => t?.hedef === "biz" && t?.durum !== "sonuclandi");
 }
 
 /** Koalisyon dışında oyuncuya beklemede teklif var mı? (Aynı hedefli koalisyon teklifi sayılmaz — yeniden üretmek için silinmez.) */
@@ -403,7 +403,7 @@ function oyuncuyaKoalisyonDisiBekleyenTeklifVarMi(koalisyonHedef) {
   return d.bekleyenTeklifler.some(
     (t) =>
       t?.hedef === "biz" &&
-      t?.durum === "beklemede" &&
+      t?.durum !== "sonuclandi" &&
       !(t?.tip === "koalisyon" && String(t?.meta?.hedef ?? "") === hedefStr)
   );
 }
@@ -415,7 +415,7 @@ function bekleyenKoalisyonDavetiBul(koalisyonHedef) {
   return (
     d.bekleyenTeklifler.find(
       (t) =>
-        t?.durum === "beklemede" &&
+        t?.durum !== "sonuclandi" &&
         t?.tip === "koalisyon" &&
         t?.hedef === "biz" &&
         String(t?.meta?.hedef ?? "") === hedefStr
@@ -428,7 +428,7 @@ function oyuncuyaTeklifOlustur(gonderen, tip, meta = {}) {
   if (!Array.isArray(d.bekleyenTeklifler)) d.bekleyenTeklifler = [];
   if (oyuncuyaBekleyenTeklifVarMi()) return null;
   const ayniTeklif = d.bekleyenTeklifler.find((t) => {
-    if (!(t?.durum === "beklemede" && t?.gonderen === gonderen && t?.hedef === "biz" && t?.tip === tip))
+    if (!(t?.durum !== "sonuclandi" && t?.gonderen === gonderen && t?.hedef === "biz" && t?.tip === tip))
       return false;
     if (tip === "koalisyon") return t?.meta?.hedef === meta?.hedef;
     return true;
@@ -458,6 +458,21 @@ function oyuncuyaTeklifOlustur(gonderen, tip, meta = {}) {
   };
   d.bekleyenTeklifler.push(teklif);
   return teklif;
+}
+
+/** Popup kuyruğuna konur; tur ilerleyip bekleyen listeden silinse bile yanıt işlenebilsin. */
+function teklifPopupYedekKaydi(t) {
+  if (!t || typeof t !== "object" || t.id == null || String(t.id) === "") return null;
+  return {
+    id: String(t.id),
+    tip: String(t.tip || ""),
+    gonderen: String(t.gonderen || ""),
+    hedef: String(t.hedef || ""),
+    tur: Number.isFinite(t.tur) ? t.tur : 0,
+    bitis: Number.isFinite(t.bitis) ? t.bitis : null,
+    durum: t.durum === "sonuclandi" ? "sonuclandi" : "beklemede",
+    meta: t.meta && typeof t.meta === "object" ? { ...t.meta } : {},
+  };
 }
 
 const RED_COOLDOWN_TUR = 50;
@@ -817,11 +832,32 @@ export function isDostIttifak(ownerA, ownerB) {
   return ittifakAktifMi(ownerA, ownerB);
 }
 
+function dengeKoalisyonuUyeleriKumesi() {
+  const d = diplomasiDurumu();
+  const k = d.koalisyon && typeof d.koalisyon === "object" ? d.koalisyon : null;
+  if (!k || !k.hedef || !ownerOyundaMi(k.hedef)) return null;
+  if (k.bizKatilim !== true) return null;
+  const hedef = k.hedef;
+  const uyeler = Array.isArray(k.uyeler) ? k.uyeler.filter(ownerOyundaMi) : [];
+  if (ownerOyundaMi("biz") && !uyeler.includes("biz")) uyeler.push("biz");
+  return { hedef, uyeler: new Set(uyeler.filter((o) => o && o !== hedef)) };
+}
+
+function dengeKoalisyonuUyeleriArasiSaldiriYasakMi(saldiran, savunan) {
+  const g = dengeKoalisyonuUyeleriKumesi();
+  if (!g) return false;
+  if (saldiran === g.hedef || savunan === g.hedef) return false;
+  return g.uyeler.has(saldiran) && g.uyeler.has(savunan);
+}
+
 export function diplomasiSaldiriYasakSebebi(saldiran, hedef) {
   if (!saldiran || !hedef || saldiran === hedef) return "Geçersiz hedef.";
   if (barisAktifMi(saldiran, hedef)) return "Aktif barış anlaşması var.";
   if (ateskesAktifMi(saldiran, hedef)) return "Aktif ateşkes var.";
   if (ittifakAktifMi(saldiran, hedef)) return "Aktif ittifak varken saldırı yapılamaz.";
+  if (dengeKoalisyonuUyeleriArasiSaldiriYasakMi(saldiran, hedef)) {
+    return "Denge koalisyonu: üyeler birbirine saldıramaz.";
+  }
   return "";
 }
 
@@ -1908,24 +1944,218 @@ function savasBarisKritikBildirimleri(messages) {
   });
 }
 
+function koalisyonDengeUyelerBarisiKaldir(d) {
+  if (!d || !Array.isArray(d.anlasmalar)) return;
+  d.anlasmalar = d.anlasmalar.filter((a) => !a?.meta?.dengeKoalisyonuUyeleri);
+}
+
+function koalisyonUyeleriSaldirmazliginiKur(uyeListe) {
+  const liste = [...new Set((uyeListe || []).filter(Boolean))].filter(ownerOyundaMi);
+  for (let i = 0; i < liste.length; i += 1) {
+    for (let j = i + 1; j < liste.length; j += 1) {
+      anlasmaEkle("baris", liste[i], liste[j], 0, { kalici: true, meta: { dengeKoalisyonuUyeleri: true } });
+    }
+  }
+}
+
+function dengeKoalisyonuSonlandir(d, messages, gunlukMesaj) {
+  const vardi = !!(d.koalisyon && typeof d.koalisyon === "object");
+  koalisyonDengeUyelerBarisiKaldir(d);
+  if (vardi) {
+    if (Array.isArray(messages)) messages.push("Denge Koalisyonu dağıldı.");
+    diploKayitEkle("koalisyon-bitti", gunlukMesaj || "Denge Koalisyonu dağıldı.", "bilgi");
+  }
+  d.koalisyon = null;
+  d.koalisyonDavetRetKisiti = null;
+}
+
+/** Ret: barışta → hedefle savaş olana kadar davet yok; savaşta → bir davet; o da ret ise kapanır */
+const KOAL_RET_SAVAS_BEKLIYOR = "savas-bekliyor";
+const KOAL_RET_SAVASTA_TEK_HAK = "savasta-tek-hak";
+const KOAL_RET_SAVASTA_DAVET_ACIK = "savasta-davet-acik";
+const KOAL_RET_KAPALI = "kapali";
+
+function koalisyonDavetRetKisitiSavasGuncelle(d) {
+  const kis = d.koalisyonDavetRetKisiti;
+  if (!kis || typeof kis !== "object" || !kis.hedef) return;
+  const h = String(kis.hedef);
+  if (!h) {
+    d.koalisyonDavetRetKisiti = null;
+    return;
+  }
+  const savas = savastaMi("biz", h);
+  if (kis.asama === KOAL_RET_SAVAS_BEKLIYOR && savas) {
+    kis.asama = KOAL_RET_SAVASTA_TEK_HAK;
+    return;
+  }
+  if (kis.asama === KOAL_RET_SAVASTA_TEK_HAK && !savas) {
+    kis.asama = KOAL_RET_SAVAS_BEKLIYOR;
+    return;
+  }
+  if (kis.asama === KOAL_RET_SAVASTA_DAVET_ACIK && !savas) {
+    kis.asama = KOAL_RET_KAPALI;
+  }
+}
+
+function koalisyonDavetPopupDene(d, messages, hedefOwner, uyelerCekirdek) {
+  const bizAktif = DIPLO_OWNERLER.filter((id) => (oyun.bolgeler || []).some((b) => b.owner === id)).includes(
+    "biz"
+  );
+  if (
+    !bizAktif ||
+    hedefOwner === "biz" ||
+    d.koalisyon.bizKatilim === true ||
+    (Array.isArray(d.koalisyon.uyeler) && d.koalisyon.uyeler.includes("biz"))
+  ) {
+    return;
+  }
+  koalisyonDavetRetKisitiSavasGuncelle(d);
+  const hStr = String(hedefOwner);
+  const kis = d.koalisyonDavetRetKisiti;
+  if (kis && typeof kis === "object" && kis.hedef != null) {
+    const kH = String(kis.hedef);
+    const koH = d.koalisyon?.hedef != null ? String(d.koalisyon.hedef) : "";
+    if (koH && kH !== koH) {
+      d.koalisyonDavetRetKisiti = null;
+    } else if (kH === hStr) {
+      if (kis.asama === KOAL_RET_KAPALI) return;
+      if (kis.asama === KOAL_RET_SAVAS_BEKLIYOR) return;
+    }
+  }
+  const davetAralik = Math.max(4, Number(DIPLOMASI.KOALISYON_DAVET_TUR_ARALIK || 22));
+  const rawDavetTur = d.koalisyon?.davetTur;
+  const sonDavetTur = Number(rawDavetTur);
+  const davetCooldownAktif =
+    rawDavetTur != null &&
+    Number.isFinite(sonDavetTur) &&
+    oyun.tur - sonDavetTur < davetAralik;
+  const koalisyonTipKalan = oyuncuTeklifTipCooldownKalan("koalisyon");
+  const bekleyenAyniKoalisyon = bekleyenKoalisyonDavetiBul(hedefOwner);
+  if (
+    davetCooldownAktif ||
+    koalisyonTipKalan > 0 ||
+    oyuncuyaKoalisyonDisiBekleyenTeklifVarMi(hedefOwner)
+  ) {
+    return;
+  }
+  const koalisyonPopupEkle = (teklif, davetci) => {
+    if (!teklif?.meta || typeof teklif.meta !== "object") teklif.meta = {};
+    if (teklif.meta.davetPopupGosterildi === true) return;
+    if (teklif.durum === "sonuclandi") return;
+    teklif.meta.davetPopupGosterildi = true;
+    const kisP = d.koalisyonDavetRetKisiti;
+    if (
+      kisP &&
+      typeof kisP === "object" &&
+      String(kisP.hedef) === hStr &&
+      kisP.asama === KOAL_RET_SAVASTA_TEK_HAK
+    ) {
+      kisP.asama = KOAL_RET_SAVASTA_DAVET_ACIK;
+    }
+    messages.push({
+      metin: `${ownerAd(davetci)} seni ${ownerAd(hedefOwner)} hedefli denge koalisyonuna çağırıyor.\n\n${teklifGetiriGoturuMetni("koalisyon", davetci, "biz")}\n\nKabul etmek için "Onayla" seç.`,
+      popup: true,
+      log: false,
+      ses: true,
+      tip: "koalisyon",
+      teklifId: teklif.id,
+      teklifSnapshot: teklifPopupYedekKaydi(teklif),
+      baslik: "Koalisyon Daveti",
+    });
+  };
+  if (bekleyenAyniKoalisyon) {
+    const davetci = bekleyenAyniKoalisyon.gonderen || uyelerCekirdek[0];
+    koalisyonPopupEkle(bekleyenAyniKoalisyon, davetci);
+  } else {
+    const davetci =
+      uyelerCekirdek
+        .slice()
+        .sort((a, b) => gucPuani(b) - gucPuani(a) || String(a).localeCompare(String(b)))[0] ||
+      uyelerCekirdek[0];
+    const teklif = oyuncuyaTeklifOlustur(davetci, "koalisyon", { hedef: hedefOwner });
+    if (teklif) {
+      d.koalisyon.davetTur = oyun.tur;
+      diploKayitEkle(
+        "koalisyon-davet",
+        `${ownerAd(davetci)} seni ${ownerAd(hedefOwner)} hedefli koalisyona davet etti.`,
+        "bilgi",
+        { taraflar: [davetci, "biz", hedefOwner], teklifId: teklif.id }
+      );
+      koalisyonPopupEkle(teklif, davetci);
+    }
+  }
+}
+
 function koalisyonKontrol(messages) {
   const d = diplomasiDurumu();
+  koalisyonDavetRetKisitiSavasGuncelle(d);
   const siralama = gucSiralamasiHesapla();
-  if (!siralama.length) return;
-  const lider = siralama[0];
   const aktifOwnerler = DIPLO_OWNERLER.filter((id) => (oyun.bolgeler || []).some((b) => b.owner === id));
   const bizAktif = aktifOwnerler.includes("biz");
+  const k0 = d.koalisyon && typeof d.koalisyon === "object" ? d.koalisyon : null;
+
+  if (k0 && k0.bizKatilim === true) {
+    if (!k0.hedef || !ownerOyundaMi(k0.hedef)) {
+      dengeKoalisyonuSonlandir(d, messages, "Koalisyon hedefi elendi.");
+    } else {
+      let uyeler = Array.isArray(k0.uyeler) ? k0.uyeler.filter(ownerOyundaMi) : [];
+      if (ownerOyundaMi("biz") && !uyeler.includes("biz")) uyeler.push("biz");
+      uyeler = uyeler.filter((o) => o !== k0.hedef);
+      d.koalisyon.uyeler = uyeler;
+      if (bizAktif && k0.hedef !== "biz") d.dengeKoalisyonuOyuncuUyesi = true;
+    }
+    return;
+  }
+
+  if (k0 && k0.bizKatilim !== true) {
+    if (!siralama.length) {
+      return;
+    }
+    const lider = siralama[0];
+    const cekirdekSay = aktifOwnerler.filter((id) => id !== lider.owner && id !== "biz").length;
+    const kosulHala =
+      lider &&
+      lider.owner === k0.hedef &&
+      lider.pay >= DIPLOMASI.GUC_ESIGI_KOALISYON &&
+      cekirdekSay >= 2 &&
+      lider.owner !== "biz";
+
+    if (!kosulHala) {
+      if (Array.isArray(d.bekleyenTeklifler)) {
+        d.bekleyenTeklifler = d.bekleyenTeklifler.filter((t) => {
+          if (!(t?.durum !== "sonuclandi" && t?.tip === "koalisyon" && t?.hedef === "biz")) return true;
+          diploKayitEkle(
+            "koalisyon-teklif-iptal",
+            "Denge koalisyonu artık geçerli değil; davet iptal edildi.",
+            "bilgi",
+            { taraflar: [t.gonderen, "biz"], teklifId: t.id }
+          );
+          return false;
+        });
+      }
+      dengeKoalisyonuSonlandir(d, messages, "Denge koalisyonu koşulları sağlanmadığı için sona erdi.");
+    } else {
+      const uyelerCekirdek = aktifOwnerler.filter((id) => id !== k0.hedef && id !== "biz");
+      koalisyonDavetPopupDene(d, messages, k0.hedef, uyelerCekirdek);
+    }
+    return;
+  }
+
+  if (!siralama.length) {
+    return;
+  }
+  const lider = siralama[0];
 
   if (lider.pay >= DIPLOMASI.GUC_ESIGI_KOALISYON) {
     const uyelerCekirdek = aktifOwnerler.filter((id) => id !== lider.owner && id !== "biz");
     if (uyelerCekirdek.length >= 2) {
-      const oncekiKoalisyon = d.koalisyon && typeof d.koalisyon === "object" ? d.koalisyon : null;
-      const yeniKoalisyonMizac = !oncekiKoalisyon;
-      const hedefDegisti = oncekiKoalisyon && oncekiKoalisyon.hedef !== lider.owner;
-      const degisti = yeniKoalisyonMizac || hedefDegisti;
+      const oncekiKoalisyon = null;
+      const yeniKoalisyonMizac = true;
+      const hedefDegisti = false;
+      const degisti = true;
       if (degisti && Array.isArray(d.bekleyenTeklifler)) {
         d.bekleyenTeklifler = d.bekleyenTeklifler.filter((t) => {
-          if (!(t?.durum === "beklemede" && t?.tip === "koalisyon" && t?.hedef === "biz")) return true;
+          if (!(t?.durum !== "sonuclandi" && t?.tip === "koalisyon" && t?.hedef === "biz")) return true;
           diploKayitEkle(
             "koalisyon-teklif-iptal",
             "Koalisyon hedefi değişti; önceki davet geçersiz sayıldı.",
@@ -1935,7 +2165,6 @@ function koalisyonKontrol(messages) {
           return false;
         });
       }
-      // Kabul sonrası üyelik: koalisyon nesnesi bir tur null olsa da (güç eşiği / üye sayısı dalgalanması) davet tekrarlamasın.
       const oyuncuKoalisyonda =
         bizAktif &&
         lider.owner !== "biz" &&
@@ -1980,75 +2209,25 @@ function koalisyonKontrol(messages) {
         );
       }
 
+      if (d.koalisyon.bizKatilim) {
+        koalisyonUyeleriSaldirmazliginiKur(d.koalisyon.uyeler);
+      }
+
       if (
         bizAktif &&
         lider.owner !== "biz" &&
         !uyeler.includes("biz") &&
         d.koalisyon.bizKatilim !== true
       ) {
-        const davetAralik = Math.max(4, Number(DIPLOMASI.KOALISYON_DAVET_TUR_ARALIK || 22));
-        const rawDavetTur = d.koalisyon?.davetTur;
-        const sonDavetTur = Number(rawDavetTur);
-        // null/undefined davetTur asla 0 sayılmasın (Number(null)===0 tüm soğumayı bozup her tur yeni davet üretiyordu).
-        const davetCooldownAktif =
-          rawDavetTur != null &&
-          Number.isFinite(sonDavetTur) &&
-          oyun.tur - sonDavetTur < davetAralik;
-        const koalisyonTipKalan = oyuncuTeklifTipCooldownKalan("koalisyon");
-        const bekleyenAyniKoalisyon = bekleyenKoalisyonDavetiBul(lider.owner);
-        if (
-          !davetCooldownAktif &&
-          koalisyonTipKalan <= 0 &&
-          !oyuncuyaKoalisyonDisiBekleyenTeklifVarMi(lider.owner)
-        ) {
-          const koalisyonPopupEkle = (teklif, davetci) => {
-            if (!teklif?.meta || typeof teklif.meta !== "object") teklif.meta = {};
-            if (teklif.meta.davetPopupGosterildi === true) return;
-            teklif.meta.davetPopupGosterildi = true;
-            messages.push({
-              metin: `${ownerAd(davetci)} seni ${ownerAd(lider.owner)} hedefli denge koalisyonuna çağırıyor.\n\n${teklifGetiriGoturuMetni("koalisyon", davetci, "biz")}\n\nKabul etmek için "Onayla" seç.`,
-              popup: true,
-              log: false,
-              ses: true,
-              tip: "koalisyon",
-              teklifId: teklif.id,
-              baslik: "Koalisyon Daveti",
-            });
-          };
-
-          if (bekleyenAyniKoalisyon) {
-            const davetci = bekleyenAyniKoalisyon.gonderen || uyelerCekirdek[0];
-            koalisyonPopupEkle(bekleyenAyniKoalisyon, davetci);
-          } else {
-            const davetci =
-              uyelerCekirdek
-                .slice()
-                .sort((a, b) => gucPuani(b) - gucPuani(a) || String(a).localeCompare(String(b)))[0] ||
-              uyelerCekirdek[0];
-            const teklif = oyuncuyaTeklifOlustur(davetci, "koalisyon", { hedef: lider.owner });
-            if (teklif) {
-              d.koalisyon.davetTur = oyun.tur;
-              diploKayitEkle(
-                "koalisyon-davet",
-                `${ownerAd(davetci)} seni ${ownerAd(lider.owner)} hedefli koalisyona davet etti.`,
-                "bilgi",
-                { taraflar: [davetci, "biz", lider.owner], teklifId: teklif.id }
-              );
-              koalisyonPopupEkle(teklif, davetci);
-            }
-          }
-        }
+        koalisyonDavetPopupDene(d, messages, lider.owner, uyelerCekirdek);
       }
       return;
     }
   }
 
   if (d.koalisyon) {
-    messages.push("Denge Koalisyonu dağıldı.");
-    diploKayitEkle("koalisyon-bitti", "Denge Koalisyonu dağıldı.", "bilgi");
+    dengeKoalisyonuSonlandir(d, messages, "Denge Koalisyonu dağıldı.");
   }
-  d.koalisyon = null;
-  // dengeKoalisyonuOyuncuUyesi korunur; koalisyon yeniden kurulunca tekrar davet çıkmasın.
 }
 
 function ortakDusmanVar(a, b) {
@@ -2126,6 +2305,32 @@ function koalisyonDurumunuMetaHedefeGoreKur(d, metaHedefStr) {
     bizKatilim: !!oyuncuKoalisyonda,
   };
   if (oyuncuKoalisyonda) d.dengeKoalisyonuOyuncuUyesi = true;
+  if (d.koalisyon.bizKatilim) {
+    koalisyonUyeleriSaldirmazliginiKur(d.koalisyon.uyeler);
+  }
+  return true;
+}
+
+/**
+ * Kabul sırasında güç sırası kaymış olsa bile teklif.meta.hedef ile denge koalisyon kabuğunu kurar (oyuncu dışı çekirdek üyeler).
+ */
+function koalisyonTeklifMetaHedefeZorlaKur(metaHedefStr) {
+  if (!metaHedefStr) return false;
+  const hedef = String(metaHedefStr).trim();
+  if (!hedef || hedef === "biz" || !DIPLO_OWNERLER.includes(hedef)) return false;
+  if (!ownerOyundaMi(hedef)) return false;
+  const aktifOwnerler = DIPLO_OWNERLER.filter((id) => (oyun.bolgeler || []).some((b) => b.owner === id));
+  const uyelerCekirdek = aktifOwnerler.filter((id) => id !== hedef && id !== "biz");
+  if (uyelerCekirdek.length < 2) return false;
+  const d = diplomasiDurumu();
+  const onceki = d.koalisyon && typeof d.koalisyon === "object" ? d.koalisyon : null;
+  d.koalisyon = {
+    hedef,
+    uyeler: uyelerCekirdek.slice(),
+    baslangic: onceki && Number.isFinite(onceki.baslangic) ? onceki.baslangic : oyun.tur,
+    davetTur: null,
+    bizKatilim: false,
+  };
   return true;
 }
 
@@ -2133,7 +2338,7 @@ function zorunluTeklifPopupKontrol(messages) {
   const d = diplomasiDurumu();
   if (!Array.isArray(d.bekleyenTeklifler)) return;
   d.bekleyenTeklifler
-    .filter((t) => t?.durum === "beklemede" && t?.hedef === "biz")
+    .filter((t) => t?.durum !== "sonuclandi" && t?.hedef === "biz")
     .filter((t) => t?.meta?.zorunluPopup && !t?.meta?.popupGosterildi)
     .forEach((t) => {
       t.meta.popupGosterildi = true;
@@ -2148,24 +2353,62 @@ function zorunluTeklifPopupKontrol(messages) {
         ses: true,
         tip: t.tip,
         teklifId: t.id,
+        teklifSnapshot: teklifPopupYedekKaydi(t),
         baslik: t.tip === "ittifak-mudahale" ? "İttifak Müdahalesi" : "Diplomasi Teklifi",
       });
     });
 }
 
-export function diplomasiTeklifYanitla(teklifId, kabul = false) {
+export function diplomasiTeklifYanitla(teklifId, kabul = false, teklifYedek = null) {
   const idNorm = String(teklifId ?? "");
-  const d = diplomasiDurumu();
-  if (!Array.isArray(d.bekleyenTeklifler)) d.bekleyenTeklifler = [];
-  const idx = d.bekleyenTeklifler.findIndex(
-    (t) => String(t?.id) === idNorm && t?.durum !== "sonuclandi"
-  );
-  // Çift Enter/tıklama: ilk çağrı finally ile siler; ikincisinde gürültü yok.
-  if (idx < 0) return { ok: true, mesaj: "" };
-
-  let sonuc = { ok: false, mesaj: "Teklif işlenemedi." };
+  let sonuc = { ok: true, mesaj: "" };
   try {
-  const teklif = d.bekleyenTeklifler[idx];
+    const d = diplomasiDurumu();
+    if (!Array.isArray(d.bekleyenTeklifler)) d.bekleyenTeklifler = [];
+    const idx = d.bekleyenTeklifler.findIndex((t) => String(t?.id) === idNorm);
+
+    let teklif = null;
+    if (idx >= 0) {
+      teklif = d.bekleyenTeklifler[idx];
+    } else if (
+      teklifYedek &&
+      typeof teklifYedek === "object" &&
+      String(teklifYedek.id ?? "") === idNorm &&
+      teklifYedek.hedef === "biz"
+    ) {
+      teklif = {
+        ...teklifYedek,
+        meta: teklifYedek.meta && typeof teklifYedek.meta === "object" ? { ...teklifYedek.meta } : {},
+      };
+    } else {
+      return {
+        ok: false,
+        mesaj:
+          "Bu diplomasi teklifi artık listede yok (süresi doldu veya zaten işlendi). Sayfayı yenileyip son kaydı yükleyin veya yeni davet bekleyin.",
+      };
+    }
+
+    if (teklif.durum === "sonuclandi") {
+      return sonuc;
+    }
+
+    if (teklif.tip === "koalisyon" && kabul) {
+      const d0 = diplomasiDurumu();
+      const metaH = teklif?.meta?.hedef != null ? String(teklif.meta.hedef).trim() : null;
+      if (
+        metaH &&
+        d0.koalisyon &&
+        typeof d0.koalisyon === "object" &&
+        d0.koalisyon.bizKatilim === true &&
+        String(d0.koalisyon.hedef) === metaH &&
+        Array.isArray(d0.koalisyon.uyeler) &&
+        d0.koalisyon.uyeler.includes("biz")
+      ) {
+        return { ok: true, mesaj: "Koalisyona zaten katılıyorsun." };
+      }
+    }
+
+    sonuc = { ok: false, mesaj: "Teklif işlenemedi." };
   if (Number.isFinite(teklif.bitis) && teklif.bitis < oyun.tur) {
     sonuc = { ok: false, mesaj: "Teklifin süresi doldu." };
     return sonuc;
@@ -2178,37 +2421,86 @@ export function diplomasiTeklifYanitla(teklifId, kabul = false) {
   else if (teklif.tip === "ittifak") sonuc = ittifakTeklifiSonuclandir(gonderen, hedef, !!kabul);
   else if (teklif.tip === "ticaret") sonuc = ticaretTeklifiSonuclandir(gonderen, hedef, !!kabul);
   else if (teklif.tip === "koalisyon") {
-    const metaHedef = teklif?.meta?.hedef != null ? String(teklif.meta.hedef) : null;
-    if (!d.koalisyon && metaHedef) {
-      koalisyonDurumunuMetaHedefeGoreKur(d, metaHedef);
+    const metaHedef = teklif?.meta?.hedef != null ? String(teklif.meta.hedef).trim() : null;
+    const kabulEdildi = !!kabul;
+
+    let dK = diplomasiDurumu();
+    if (!dK.koalisyon && metaHedef) {
+      koalisyonDurumunuMetaHedefeGoreKur(dK, metaHedef);
+    }
+    dK = diplomasiDurumu();
+    if (
+      metaHedef &&
+      kabulEdildi &&
+      (!dK.koalisyon || String(dK.koalisyon.hedef) !== String(metaHedef))
+    ) {
+      koalisyonTeklifMetaHedefeZorlaKur(metaHedef);
+      dK = diplomasiDurumu();
     }
     const hedefUyumsuz =
-      !d.koalisyon ||
-      (metaHedef != null && String(d.koalisyon.hedef) !== metaHedef);
+      !dK.koalisyon ||
+      (metaHedef != null && String(dK.koalisyon.hedef) !== String(metaHedef));
     if (hedefUyumsuz) {
       koalisyonYanitiUyumsuz = true;
-      sonuc = { ok: false, mesaj: "Koalisyon artık aktif değil." };
-    } else if (!kabul) {
-      d.dengeKoalisyonuOyuncuUyesi = false;
-      const uyeler = Array.isArray(d.koalisyon.uyeler) ? d.koalisyon.uyeler : [];
-      uyeler.forEach((u) => iliskiDegistir("biz", u, -5, "Koalisyon daveti reddedildi"));
+      sonuc = {
+        ok: false,
+        mesaj:
+          "Koalisyon bu teklifle eşleşmiyor (hedef elendi veya koşullar bozuldu). Yeni davet gerekir.",
+      };
+    } else if (!kabulEdildi) {
+      const uyelerRed = Array.isArray(dK.koalisyon.uyeler) ? dK.koalisyon.uyeler : [];
+      uyelerRed.forEach((u) => iliskiDegistir("biz", u, -5, "Koalisyon daveti reddedildi"));
+      const dRed = diplomasiDurumu();
+      dRed.dengeKoalisyonuOyuncuUyesi = false;
       sonuc = { ok: false, mesaj: "Koalisyon daveti reddedildi." };
+      const hStr = String(dRed.koalisyon?.hedef || metaHedef || "");
+      if (hStr) {
+        if (!dRed.koalisyonDavetRetKisiti || typeof dRed.koalisyonDavetRetKisiti !== "object") {
+          dRed.koalisyonDavetRetKisiti = { hedef: hStr, asama: "" };
+        }
+        const kR = dRed.koalisyonDavetRetKisiti;
+        kR.hedef = hStr;
+        if (!savastaMi("biz", hStr)) {
+          kR.asama = KOAL_RET_SAVAS_BEKLIYOR;
+        } else if (
+          kR.asama === KOAL_RET_SAVASTA_TEK_HAK ||
+          kR.asama === KOAL_RET_SAVASTA_DAVET_ACIK
+        ) {
+          kR.asama = KOAL_RET_KAPALI;
+        }
+      }
     } else {
-      if (!Array.isArray(d.koalisyon.uyeler)) d.koalisyon.uyeler = [];
-      if (!d.koalisyon.uyeler.includes("biz")) d.koalisyon.uyeler.push("biz");
-      d.koalisyon.bizKatilim = true;
-      d.dengeKoalisyonuOyuncuUyesi = true;
-      d.koalisyon.uyeler
-        .filter((u) => u !== "biz")
-        .forEach((u) => iliskiDegistir("biz", u, +8, "Koalisyon katılımı"));
-      diploKayitEkle(
-        "koalisyon-katilim",
-        `${ownerAd(gonderen)} davetiyle koalisyona katıldın. Hedef: ${ownerAd(d.koalisyon.hedef)}.`,
-        "bilgi",
-        { taraflar: ["biz", ...d.koalisyon.uyeler] }
-      );
-      sonuc = { ok: true, mesaj: "Koalisyona katılım kabul edildi." };
-      if (d.koalisyon && typeof d.koalisyon === "object") d.koalisyon.davetTur = null;
+      const dA = diplomasiDurumu();
+      if (!dA.koalisyon || typeof dA.koalisyon !== "object") {
+        sonuc = { ok: false, mesaj: "Koalisyon durumu bulunamadı." };
+      } else {
+        if (!Array.isArray(dA.koalisyon.uyeler)) dA.koalisyon.uyeler = [];
+        if (!dA.koalisyon.uyeler.includes("biz")) dA.koalisyon.uyeler.push("biz");
+        dA.koalisyon.bizKatilim = true;
+        dA.dengeKoalisyonuOyuncuUyesi = true;
+        dA.koalisyon.uyeler
+          .filter((u) => u !== "biz")
+          .forEach((u) => iliskiDegistir("biz", u, +8, "Koalisyon katılımı"));
+        const d2 = diplomasiDurumu();
+        if (!d2.koalisyon || typeof d2.koalisyon !== "object") {
+          sonuc = { ok: false, mesaj: "Koalisyon durumu güncellenemedi." };
+        } else {
+          if (!Array.isArray(d2.koalisyon.uyeler)) d2.koalisyon.uyeler = [];
+          if (!d2.koalisyon.uyeler.includes("biz")) d2.koalisyon.uyeler.push("biz");
+          d2.koalisyon.bizKatilim = true;
+          d2.dengeKoalisyonuOyuncuUyesi = true;
+          d2.koalisyon.davetTur = null;
+          d2.koalisyonDavetRetKisiti = null;
+          koalisyonUyeleriSaldirmazliginiKur(d2.koalisyon.uyeler);
+          diploKayitEkle(
+            "koalisyon-katilim",
+            `${ownerAd(gonderen)} davetiyle koalisyona katıldın. Hedef: ${ownerAd(d2.koalisyon.hedef)}. Üyeler arası saldırmazlık yürürlükte.`,
+            "bilgi",
+            { taraflar: ["biz", ...d2.koalisyon.uyeler] }
+          );
+          sonuc = { ok: true, mesaj: "Koalisyona katılım kabul edildi." };
+        }
+      }
     }
   } else if (teklif.tip === "ittifak-mudahale") {
     const saldiran = teklif?.meta?.saldiran || "";
@@ -2383,6 +2675,12 @@ function aiDiplomasiKararlari(messages) {
     if (bizTeklifi) {
       const etki = teklifGetiriGoturuMetni(sonuc.tip, owner, "biz");
       const soru = `${ownerAd(owner)} senden ${tipAd} teklifi istiyor.\n\n${etki}\n\nKabul etmek için "Onayla", reddetmek için "İptal" seç.`;
+      const tid = sonuc.teklifId != null ? String(sonuc.teklifId) : "";
+      const dSnap = diplomasiDurumu();
+      const tSatir =
+        tid && Array.isArray(dSnap.bekleyenTeklifler)
+          ? dSnap.bekleyenTeklifler.find((x) => String(x?.id) === tid)
+          : null;
       messages.push({
         metin: soru,
         popup: true,
@@ -2390,6 +2688,7 @@ function aiDiplomasiKararlari(messages) {
         ses: true,
         tip: sonuc.tip,
         teklifId: sonuc.teklifId || null,
+        teklifSnapshot: teklifPopupYedekKaydi(tSatir),
         baslik: "Diplomasi Teklifi",
       });
       return;

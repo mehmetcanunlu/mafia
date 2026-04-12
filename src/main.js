@@ -56,6 +56,11 @@ import {
   ittifakMudahaleKuyrugundanHazirOlanlariAl,
 } from "./diplomasi.js";
 
+/** Tarayıcı konsolunda `__MAFIYA_CLI` yazın; güncel kaynakta "mafia-main/diplo-koal-20260410" görünür. */
+if (typeof globalThis !== "undefined") {
+  globalThis.__MAFIYA_CLI = "mafia-main/koalisyon-kabul-d2-20260410";
+}
+
 let baslangicSecimModu = false;
 let bekleyenBaslangicKurulumu = null;
 let modalPopupKuyrugu = Promise.resolve();
@@ -70,6 +75,15 @@ document.addEventListener("ui:modal-pause", () => {
     ustPanelOyunButonlariniBagla(callbacklar);
   } catch (e) {
     console.error("[ui:modal-pause]", e);
+  }
+});
+
+document.addEventListener("ui:modal-unpause", () => {
+  try {
+    durumCiz();
+    ustPanelOyunButonlariniBagla(callbacklar);
+  } catch (e) {
+    console.error("[ui:modal-unpause]", e);
   }
 });
 
@@ -93,19 +107,30 @@ function diploPopupKuyrugaEkle(olay) {
   const metin = typeof olay === "string" ? olay : String(olay.metin || "").trim();
   if (!metin) return;
   const baslik = typeof olay === "object" ? (olay.baslik || "Diplomasi") : "Diplomasi";
+  const idKayit =
+    typeof olay === "object" && olay != null && olay.teklifId != null && String(olay.teklifId) !== ""
+      ? String(olay.teklifId)
+      : "";
+  const teklifYedek =
+    typeof olay === "object" && olay != null && olay.teklifSnapshot && typeof olay.teklifSnapshot === "object"
+      ? olay.teklifSnapshot
+      : null;
   popupKuyrugaEkle(async () => {
-    if (typeof olay === "object" && olay.teklifId) {
+    if (idKayit) {
       try {
         const kabul = await showConfirm(metin, baslik, { oyunuDuraklat: true });
-        const sonuc = diplomasiTeklifYanitla(String(olay.teklifId), !!kabul);
-        if (
-          sonuc?.mesaj &&
-          /(ittifak|koalisyon|m[üu]dahale|savaş|barış|ateskes|ticaret|teklif)/i.test(sonuc.mesaj)
-        ) {
-          logYaz(`🤝 ${sonuc.mesaj}`);
+        const sonuc = diplomasiTeklifYanitla(idKayit, !!kabul, teklifYedek);
+        if (sonuc?.mesaj) {
+          if (!sonuc.ok) {
+            logYaz(`⚠️ ${sonuc.mesaj}`);
+          } else if (
+            /(ittifak|koalisyon|m[üu]dahale|savaş|barış|ateskes|ticaret|teklif)/i.test(sonuc.mesaj)
+          ) {
+            logYaz(`🤝 ${sonuc.mesaj}`);
+          }
         }
       } catch (err) {
-        console.error("[diploPopup] teklif yaniti", olay?.teklifId, err);
+        console.error("[diploPopup] teklif yaniti", idKayit, err);
         logYaz(`⚠️ Diplomasi yanıtı işlenemedi (konsola bakın).`);
       }
       uiGuncel(callbacklar);
@@ -1619,6 +1644,7 @@ function turIsle() {
   // Diplomasi turu
   const diploMesajlar = diplomasiTick();
   let diploOlayVar = false;
+  const teklifPopupBuTur = new Set();
   diploMesajlar.forEach((ham) => {
     if (!ham) return;
     const olay = (typeof ham === "string") ? { metin: ham } : ham;
@@ -1626,14 +1652,20 @@ function turIsle() {
     if (!metin || metin.includes("hafıza")) return;
 
     if (olay.popup) {
-      // Teklif penceresi kuyrukta beklerken tur işlenmesin; aksi halde koalisyon nesnesi kaybolup kabul/ret boşa düşüyordu.
-      if (typeof olay === "object" && olay.teklifId) {
+      let popupAtla = false;
+      if (typeof olay === "object" && olay.teklifId != null && String(olay.teklifId) !== "") {
+        const tid = String(olay.teklifId);
+        if (teklifPopupBuTur.has(tid)) popupAtla = true;
+        else teklifPopupBuTur.add(tid);
+        // Teklif penceresi kuyrukta beklerken tur işlenmesin; aksi halde koalisyon nesnesi kaybolup kabul/ret boşa düşüyordu.
         oyun.duraklat = true;
       }
-      diploPopupKuyrugaEkle({
-        ...olay,
-        metin,
-      });
+      if (!popupAtla) {
+        diploPopupKuyrugaEkle({
+          ...olay,
+          metin,
+        });
+      }
       diploOlayVar = true;
     }
 

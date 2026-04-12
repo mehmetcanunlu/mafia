@@ -118,6 +118,8 @@ export function yeniDiplomasiDurumu(fraksiyonlar = null) {
     oyuncuTeklifTipCooldown: {},
     bekleyenTeklifler: [],
     koalisyon: null,
+    /** Koalisyon daveti ret → savaş beklenir / savaşta tek hak / kapalı (hedef owner id ile) */
+    koalisyonDavetRetKisiti: null,
     /** Koalisyon nesnesi tur içinde null olsa bile (eşik altı vb.) kabul edilmiş üyeliği hatırla */
     dengeKoalisyonuOyuncuUyesi: false,
     ittifakMudahaleKuyrugu: [],
@@ -271,12 +273,33 @@ export function diplomasiDurumuTamamla(diplomasi, fraksiyonlar = oyun?.fraksiyon
     bekleyenTeklifler,
     koalisyon:
       d.koalisyon && typeof d.koalisyon === "object"
-        ? {
-            ...d.koalisyon,
-            uyeler: Array.isArray(d.koalisyon.uyeler) ? [...d.koalisyon.uyeler] : [],
-          }
+        ? (() => {
+            const src = d.koalisyon;
+            let uyeler = Array.isArray(src.uyeler) ? [...src.uyeler] : [];
+            let bizKat = !!src.bizKatilim;
+            if (d.dengeKoalisyonuOyuncuUyesi && src.hedef && src.hedef !== "biz") {
+              bizKat = true;
+              if (!uyeler.includes("biz")) uyeler.push("biz");
+            }
+            if (bizKat && !uyeler.includes("biz")) uyeler.push("biz");
+            return {
+              hedef: src.hedef,
+              uyeler,
+              baslangic: src.baslangic,
+              davetTur: src.davetTur ?? null,
+              bizKatilim: bizKat,
+            };
+          })()
         : null,
     dengeKoalisyonuOyuncuUyesi: !!d.dengeKoalisyonuOyuncuUyesi,
+    koalisyonDavetRetKisiti: (() => {
+      const k = d.koalisyonDavetRetKisiti;
+      if (!k || typeof k !== "object") return null;
+      const hedef = String(k.hedef || "");
+      const asama = String(k.asama || "");
+      if (!hedef) return null;
+      return { hedef, asama };
+    })(),
     ittifakMudahaleKuyrugu,
     kritikBildirim,
     oyuncuAksiyon,
