@@ -3,6 +3,12 @@
 Tarih: 2026-04-07  
 Inceleme kapsami: kod tabani statik analiz (oyun dongusu, ekonomi, savas, AI, lojistik, casusluk)
 
+> **KAPANIŞ (2026-08-28):** Bu rapordaki tüm bulgular kodda doğrulanarak kapandı —
+> taşıt iade akışı düzeltildi (`bolgeTasitIadeEt` owner çözümlemesi), birlik
+> kopyalama giderildi, kullanılmayan zorluk parametreleri (`aiAttackChance`,
+> `aiPenaltyVsPlayer`, `aiCooldownMin/Max`, `aiBribePref`) AI kararlarına bağlandı.
+> Doküman arşiv niteliğindedir; güncel durum `PROJE_PLANI.md`'dedir.
+
 ## Ozet
 
 Kod tabaninda oyun dengesini dogrudan bozan iki kritik sorun var:

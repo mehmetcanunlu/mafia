@@ -1,4 +1,4 @@
-import { oyun, bolgeById, kullanilabilirBiz, ownerToplamPersonel, ownerPersonelTavan } from "./state.js";
+import { oyun, bolgeById, kullanilabilirBiz, ownerToplamPersonel, ownerPersonelTavan, fraksiyonAdi, ekonomiDurumu, asayisDurumu, ownerOrtalamaSadakat } from "./state.js";
 import { logYaz, uiGuncel } from "./ui.js";
 import { AYAR, SOHRET, BINA_TIPLERI, DIPLOMASI, MEKANIK, EKONOMI_DENGE } from "./config.js";
 import { saldiriMaliyeti } from "./combat.js";
@@ -50,12 +50,6 @@ function binaMaliyetiHesapla(tip, seviye) {
   const ham = tanim.maliyet * Math.pow(carp, Math.max(0, seviye - 1));
   const indirimli = ham * (1 - liderBinaIndirimi());
   return Math.ceil(indirimli);
-}
-
-function garnizonKapasitesi(bolge) {
-  const taban = Math.max(10, Math.round((bolge.nufusMax || bolge.nufus || 60) / 8));
-  const arastirma = 1 + arastirmaEfekt("garnizonBonus");
-  return Math.round(taban * arastirma + (bolge.yGuv || 0) * 2);
 }
 
 function tasitPlanMetni(plan) {
@@ -317,16 +311,6 @@ function bolgedenBirlikCek(owner, bolgeId, adet) {
   return { tip: baskinTip };
 }
 
-function asayisDurumu() {
-  if (!oyun.asayis || typeof oyun.asayis !== "object") {
-    oyun.asayis = { sucluluk: 0, polisBaski: 0, sonBaskinTur: -999 };
-  }
-  if (!Number.isFinite(oyun.asayis.sucluluk)) oyun.asayis.sucluluk = 0;
-  if (!Number.isFinite(oyun.asayis.polisBaski)) oyun.asayis.polisBaski = 0;
-  if (!Number.isFinite(oyun.asayis.sonBaskinTur)) oyun.asayis.sonBaskinTur = -999;
-  return oyun.asayis;
-}
-
 function sinirla(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
@@ -340,18 +324,6 @@ function suclulukEkle(miktar) {
   a.polisBaski = sinirla(a.polisBaski + netMiktar * 0.45 * (1 - polisKoruma * 0.5), 0, 100);
 }
 
-function ekonomiDurumu() {
-  if (!oyun.ekonomi || typeof oyun.ekonomi !== "object") {
-    oyun.ekonomi = { haracSeviye: "orta", alimBuTur: 0, sonHaracGeliri: 0, personelTavanEk: 0 };
-  }
-  const h = oyun.ekonomi.haracSeviye;
-  if (!EKONOMI_DENGE.haracSeviyeleri[h]) oyun.ekonomi.haracSeviye = "orta";
-  oyun.ekonomi.alimBuTur = Math.max(0, Math.floor(Number(oyun.ekonomi.alimBuTur) || 0));
-  oyun.ekonomi.sonHaracGeliri = Math.max(0, Math.round(Number(oyun.ekonomi.sonHaracGeliri) || 0));
-  oyun.ekonomi.personelTavanEk = Math.max(0, Math.round(Number(oyun.ekonomi.personelTavanEk) || 0));
-  return oyun.ekonomi;
-}
-
 function bizToplamPersonel() {
   return ownerToplamPersonel("biz");
 }
@@ -361,10 +333,7 @@ function ownerToplamTasitKapasite(owner = "biz") {
 }
 
 function bizOrtalamaSadakat() {
-  const bolgeler = oyun.bolgeler.filter((b) => b.owner === "biz");
-  if (!bolgeler.length) return 55;
-  const toplam = bolgeler.reduce((t, b) => t + (Number(b.sadakat) || 55), 0);
-  return toplam / bolgeler.length;
+  return ownerOrtalamaSadakat("biz");
 }
 
 function birimAlimLimitleri() {
@@ -664,45 +633,6 @@ export async function binaYukselt(tip) {
   uiGuncel(callbacklar);
 }
 
-export async function garnizonAyarla() {
-  const b = bolgeById(oyun.seciliId);
-  if (!b || b.owner !== "biz") return;
-  const kullan = kullanilabilirBiz();
-  const kapasite = garnizonKapasitesi(b);
-  const mevcut = ownerBolgeHazirToplam("biz", b.id);
-  const v = await showPrompt(
-    `Yeni garnizon sayısı?\nŞu an: ${mevcut} | Kullanılabilir: ${kullan} | Kapasite: ${kapasite}`,
-    'Garnizon Ayarla'
-  );
-  if (v === null) return;
-  const hedef = parseInt(v);
-  if (isNaN(hedef) || hedef < 0) {
-    await showAlert("Geçersiz sayı.");
-    return;
-  }
-  const fark = hedef - mevcut;
-  if (fark > 0 && fark > kullan) {
-    await showAlert("Yeterli kullanılabilir adam yok.");
-    return;
-  }
-  if (hedef > kapasite) {
-    await showAlert(`Bu bölge için maksimum garnizon kapasitesi ${kapasite}.`);
-    return;
-  }
-
-  if (fark > 0) {
-    yiginaEkle(b.id, "biz", fark, "tetikci");
-  } else if (fark < 0) {
-    const cekim = bolgedenBirlikCek("biz", b.id, -fark);
-    if (!cekim) {
-      await showAlert("Bu bölgede yeterli hazır birlik yok.");
-      return;
-    }
-  }
-  logYaz(`${b.ad} garnizon ${hedef} olarak ayarlandı.`);
-  uiGuncel(callbacklar);
-}
-
 /* SADECE TARAFSIZ İÇİN RÜŞVET */
 export async function teslimAl() {
   const hedef = bolgeById(oyun.seciliId);
@@ -792,7 +722,7 @@ export async function saldiri() {
     'Saldırı'
   );
   if (girdi === null) return;
-  const gonder = parseInt(girdi);
+  const gonder = parseInt(girdi, 10);
   if (isNaN(gonder) || gonder <= 0 || gonder > kaynakToplam) {
     await showAlert("Geçersiz sayı.");
     return;
@@ -828,6 +758,20 @@ export async function saldiri() {
     'Saldırıyı Onayla'
   );
   if (!onay) return;
+  // Onay dialogu açıkken (await sırasında) durum değişmiş olabilir:
+  // hedef sahibi, diplomasi ve para koşullarını yeniden doğrula
+  if (hedef.owner === "biz" || hedef.owner === "tarafsiz") {
+    await showAlert("Hedef bölgenin durumu değişti, saldırı iptal edildi.");
+    return;
+  }
+  if (!diplomasiSaldiriMumkunMu("biz", hedef.owner)) {
+    await showAlert(diplomasiSaldiriYasakSebebi("biz", hedef.owner) || "Bu hedefe saldırı artık mümkün değil.");
+    return;
+  }
+  if (oyun.fraksiyon.biz.para < maliyet) {
+    await showAlert(`Yetersiz para. Gerekli: ${maliyet} ₺`);
+    return;
+  }
   const ayrilanTasit = ownerTasitAyir("biz", gonder);
   if (!ayrilanTasit) {
     await showAlert(`Taşıt stoğu değişti. ${tasitStokMetni("biz")}`);
@@ -868,6 +812,8 @@ export async function saldiri() {
 /* === [DURAKLAT] === */
 export function duraklatDevam() {
   oyun.duraklat = !oyun.duraklat;
+  // Oyuncunun açık niyeti: modal kapanışındaki otomatik devam bunu ezmesin
+  oyun._manuelDuraklatma = oyun.duraklat;
   uiGuncel(callbacklar);
 }
 export function hizAyarla(k) {
@@ -1405,6 +1351,44 @@ export async function hizliTransferSeciliBolgeden(hedefId) {
   if (adet === null) {
     return;
   }
+
+  oyun.hareketEmri = { owner: "biz", kaynakId: kaynak.id, adet };
+  await hareketEmriHedefSec(hedef.id);
+}
+
+/* Haritada sürükle-bırak ile birlik hareketi:
+   kendi bölgemizden dost bölgeye transfer, düşman bölgeye saldırı emri. */
+export async function surukleBirakHareket(kaynakId, hedefId) {
+  const kaynak = bolgeById(kaynakId);
+  const hedef = bolgeById(hedefId);
+  if (!kaynak || !hedef || kaynak.id === hedef.id) return;
+  if (kaynak.owner !== "biz") return;
+  if (hedef.owner === "tarafsiz") {
+    await showAlert("Tarafsız bölgelere asker gönderemezsin; rüşvet kullan.");
+    return;
+  }
+  if (hedef.owner !== "biz" && !diplomasiSaldiriMumkunMu("biz", hedef.owner)) {
+    await showAlert(diplomasiSaldiriYasakSebebi("biz", hedef.owner) || "Bu hedefe saldırı şu an mümkün değil.");
+    return;
+  }
+
+  const mevcut = ownerBolgeHazirToplam("biz", kaynak.id);
+  if (mevcut <= 0) {
+    await showAlert("Kaynak bölgede gönderilecek hazır birlik yok.");
+    return;
+  }
+
+  const saldiriMi = hedef.owner !== "biz";
+  const adet = await birlikAdediSliderSec({
+    baslik: saldiriMi ? "Saldırı Emri" : "Birlik Transferi",
+    mesaj:
+      `${kaynak.ad} → ${hedef.ad}${saldiriMi ? ` (${fraksiyonAdi(hedef.owner)})` : ""}\n` +
+      `Kaynak hazır birlik: ${mevcut}\n` +
+      `Toplam hazır birlik: ${ownerHazirToplam("biz")}\n${lojistikKapasiteMetni("biz")}`,
+    maksimum: mevcut,
+    varsayilan: mevcut,
+  });
+  if (adet === null) return;
 
   oyun.hareketEmri = { owner: "biz", kaynakId: kaynak.id, adet };
   await hareketEmriHedefSec(hedef.id);
@@ -2181,6 +2165,7 @@ export const callbacklar = {
   toplantiNoktasinaCagir,
   toplantiNoktasinaGonder,
   hizliTransferSeciliBolgeden,
+  surukleBirakHareket,
   hareketEmriHedefSec,
   saldiriHizliAcil,
   birimSatinAl,

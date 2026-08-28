@@ -167,11 +167,16 @@ function suikastBolgeKaybiUygula(hedefOwner, saldiranOwner = "biz") {
   if (!kaynak) return null;
 
   const devralan = sinirAdaylari.length ? saldiranOwner : "tarafsiz";
+  // Devredilecek garnizon, eski sahibin bölgedeki birliklerinin yarısı
+  // (bolge.garnizon alanı artık kullanılmıyor; savunma oyun.birimler'den okunur)
+  const eskiBirim = (oyun.birimler || [])
+    .filter((u) => u.owner === hedefOwner && u.konumId === kaynak.id)
+    .reduce((t, u) => t + (u.adet || 0), 0);
   ownerBirimleriSil(hedefOwner, kaynak.id);
   kaynak.owner = devralan;
-  kaynak.garnizon = Math.max(2, Math.round((kaynak.garnizon || 4) * 0.5));
   if (devralan !== "tarafsiz") {
-    yiginaEkle(kaynak.id, devralan, Math.max(3, Math.round(kaynak.garnizon || 3)), "tetikci", { tavanUygula: false });
+    const devirGarnizon = Math.max(3, Math.round(Math.max(4, eskiBirim) * 0.5));
+    yiginaEkle(kaynak.id, devralan, devirGarnizon, "tetikci", { tavanUygula: false });
   }
   return { bolgeId: kaynak.id, bolgeAd: kaynak.ad, devralan };
 }
@@ -199,8 +204,8 @@ function suikastKomutaDarbeUygula(hedefOwner) {
 function suikastCeteCokusUygula(hedefOwner) {
   const ownerBolgeler = (oyun.bolgeler || []).filter((b) => b.owner === hedefOwner);
   ownerBolgeler.forEach((b) => {
+    // Tarafsız bölgelerin savunması guv/nufus'tan türetilir; garnizon alanı ölü
     b.owner = "tarafsiz";
-    b.garnizon = Math.max(3, Math.round((b.nufus || b.nufusMax || 70) / 28));
   });
   ownerBirimleriSil(hedefOwner);
   const fr = oyun.fraksiyon?.[hedefOwner];

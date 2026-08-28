@@ -1,0 +1,25 @@
+{
+  "name": "mafia-bolge-savasi",
+  "version": "1.0.0",
+  "description": "Mafya Bölge Savaşı — tur tabanlı Türk mafya strateji oyunu",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build-www.mjs",
+    "serve": "python3 -m http.server 8734 --bind 127.0.0.1",
+    "sim": "node scripts/sim-test.mjs",
+    "cap:sync": "npm run build && npx cap sync",
+    "cap:ios": "npm run cap:sync && npx cap open ios",
+    "cap:android": "npm run cap:sync && npx cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/cli": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/ios": "^8.5.0"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "sharp": "^0.35.4"
+  }
+}

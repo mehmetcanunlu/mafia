@@ -1,9 +1,9 @@
 // stats.js — İstatistik takip ve grafik çizim modülü
 import { oyun } from "./state.js";
+import { ownerTurGeliri } from "./ekonomi.js";
 
 // Dirty flag — sadece veri değiştiğinde grafik yeniden çizilir
 let _dirty = false;
-export function istatistikDirtyIsaretle() { _dirty = true; }
 
 // Tur bazlı veri deposu
 export const istatistik = {
@@ -22,7 +22,8 @@ export function istatistikKaydet() {
     if (!biz) return;
 
     const bizBolgeler = oyun.bolgeler.filter((b) => b.owner === "biz");
-    const turGelir = bizBolgeler.reduce((t, b) => t + (b.gelir || 0) * (1 + (b.yGel || 0) * 0.5), 0);
+    // Gerçek tur geliri (lider/kriz/bina/araştırma/haraç dahil) — ekonomi.js
+    const turGelir = ownerTurGeliri("biz").toplam;
 
     // Gider = saldırı/yatırım maliyetleri (fark hesabı)
     const oncekiPara = istatistik.para.length > 0 ? istatistik.para[istatistik.para.length - 1] : biz.para;

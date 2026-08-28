@@ -1,0 +1,10 @@
+.DS_Store
+node_modules/
+www/
+ios/App/Pods/
+ios/App/build/
+ios/DerivedData/
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties

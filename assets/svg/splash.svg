@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2732" height="2732" viewBox="0 0 2732 2732">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="40%" r="80%">
+      <stop offset="0%" stop-color="#16283a"/>
+      <stop offset="55%" stop-color="#0c1826"/>
+      <stop offset="100%" stop-color="#060b12"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7d774"/>
+      <stop offset="55%" stop-color="#e8b83a"/>
+      <stop offset="100%" stop-color="#c98f1b"/>
+    </linearGradient>
+    <linearGradient id="goldBrim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e8b83a"/>
+      <stop offset="100%" stop-color="#a87613"/>
+    </linearGradient>
+    <linearGradient id="band" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2c2213"/>
+      <stop offset="100%" stop-color="#15100a"/>
+    </linearGradient>
+    <clipPath id="crownClip">
+      <path d="M 384 576 C 384 424 410 300 512 300 C 614 300 640 424 640 576 Z"/>
+    </clipPath>
+  </defs>
+
+  <rect width="2732" height="2732" fill="url(#bg)"/>
+
+  <!-- Boğaz silüeti -->
+  <path d="M 1780 -100 C 1560 500 2140 860 1780 1400 C 1540 1780 1960 2260 1850 2832"
+        fill="none" stroke="#24455f" stroke-width="220" stroke-linecap="round" opacity="0.22"/>
+
+  <!-- Fedora (merkez) -->
+  <g transform="translate(1366 1120) scale(1.6) translate(-512 -463)">
+    <g transform="rotate(-5 512 500)">
+      <ellipse cx="512" cy="614" rx="235" ry="26" fill="#000000" opacity="0.4"/>
+      <ellipse cx="512" cy="566" rx="252" ry="60" fill="url(#goldBrim)" stroke="#8a5f0e" stroke-width="6"/>
+      <path d="M 384 576 C 384 424 410 300 512 300 C 614 300 640 424 640 576 Z"
+            fill="url(#gold)" stroke="#8a5f0e" stroke-width="6"/>
+      <path d="M 468 308 C 498 330 526 330 556 308" fill="none" stroke="#a87613" stroke-width="7" opacity="0.7"/>
+      <rect x="376" y="496" width="272" height="58" fill="url(#band)" clip-path="url(#crownClip)"/>
+      <polygon points="606,498 650,450 632,540" fill="#922b21"/>
+      <path d="M 330 586 Q 512 636 694 586" fill="none" stroke="#ffe9a8" stroke-width="6" opacity="0.45"/>
+    </g>
+  </g>
+
+  <!-- Başlık -->
+  <text x="1366" y="1810" font-family="Helvetica, Arial, sans-serif" font-size="252" font-weight="bold"
+        letter-spacing="26" fill="url(#gold)" text-anchor="middle">MAFYA</text>
+  <text x="1366" y="1962" font-family="Helvetica, Arial, sans-serif" font-size="112" font-weight="bold"
+        letter-spacing="46" fill="#dbe7f6" text-anchor="middle" opacity="0.92">BÖLGE SAVAŞI</text>
+
+  <!-- Köprü silüeti (alt) -->
+  <g opacity="0.9" transform="translate(0 0)">
+    <line x1="480" y1="2220" x2="2252" y2="2220" stroke="#43586b" stroke-width="26"/>
+    <rect x="1010" y="2000" width="30" height="226" fill="#5b7185"/>
+    <rect x="1692" y="2000" width="30" height="226" fill="#5b7185"/>
+    <line x1="996" y1="2064" x2="1054" y2="2064" stroke="#5b7185" stroke-width="16"/>
+    <line x1="1678" y1="2064" x2="1736" y2="2064" stroke="#5b7185" stroke-width="16"/>
+    <path d="M 480 2110 L 1025 2008 Q 1366 2210 1707 2008 L 2252 2110"
+          fill="none" stroke="#58d68d" stroke-width="18" stroke-linecap="round"/>
+    <line x1="1196" y1="2090" x2="1196" y2="2220" stroke="#58d68d" stroke-width="7" opacity="0.55"/>
+    <line x1="1366" y1="2110" x2="1366" y2="2220" stroke="#58d68d" stroke-width="7" opacity="0.55"/>
+    <line x1="1536" y1="2090" x2="1536" y2="2220" stroke="#58d68d" stroke-width="7" opacity="0.55"/>
+  </g>
+</svg>

@@ -36,24 +36,22 @@ const bizimKaynak = ownerKomsuYiginKaynak("biz", hedef.id);
 
 ## KALDIRILACAK ÖZELLİKLER
 
-### 1. Toplanma Noktası Sistemi
+### 1. Toplanma Noktası Sistemi — ❌ KALDIRMA İPTAL EDİLDİ (Ağustos 2026 kararı)
 
-Karmaşıklık katıyor, benzer işlevi "Hareket Emri" zaten kapsıyor.
+> **Güncel karar:** Bu madde uygulanmayacak. Kod tabanı planın tersine gitti ve
+> sistem tek noktadan **çok noktalı** hâle genişletildi (`oyun.toplantiNoktasi`,
+> owner başına bölge listesi). Güncel gerçeklik:
+> - `src/actions.js` — `toplantiNoktasiDurumuGetir`, `toplantiNoktasiYap`,
+>   `toplantiNoktalariSifirla`, `toplantiNoktasinaCagir`, `toplantiNoktasinaGonder`
+> - `src/ui.js` — toplanma paneli + harita bağlam menüsü girdileri
+> - `src/save.js` — eski `oyun.toplanma` alanı yüklemede `toplantiNoktasi`'na taşınır
+>
+> Aşağıdaki eski silme listesindeki `oyun.toplanma` tekil alanı zaten kaldırıldı;
+> gerisi bilinçli olarak korunuyor.
 
-**Silinecekler:**
-| Yer | Satır/Fonksiyon |
-|---|---|
-| `src/state.js` | `oyun.toplanma = { biz: null, ai1: null, ai2: null }` |
-| `src/state.js` | `oyun.toplanma` yeniOyun reset |
-| `src/save.js` | `if (!yuklenenOyun.toplanma)...` normalizasyonu |
-| `src/actions.js` | `toplanmaNoktasiYap()` export |
-| `src/actions.js` | `toplanmayaGonder()` export |
-| `src/actions.js` | `saldiriEmriVer()` içindeki `rally = oyun.toplanma.biz` mantığı |
-| `src/actions.js` | `callbacklar`'dan `toplanmaNoktasiYap`, `toplanmayaGonder` kaldır |
-| `src/ui.js:2684-2685` | "Toplanma Noktası Yap" ve "Toplanmaya Gönder" butonları |
-| `src/ui.js:2749-2760` | `bt`, `btg` event listener bağlamaları |
+Eski gerekçe (arşiv): ~~Karmaşıklık katıyor, benzer işlevi "Hareket Emri" zaten kapsıyor.~~
 
-**`saldiriEmriVer` → `hareketEmriSaldiriBaslat` olarak yeniden yaz** (aşağıda detay)
+**`saldiriEmriVer` → `hareketEmriSaldiriBaslat` olarak yeniden yaz** (aşağıda detay) — ✅ yapıldı
 
 ---
 

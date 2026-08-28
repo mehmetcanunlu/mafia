@@ -3,6 +3,20 @@
 import { yeniOyun, oyun, yiginaEkle, sohretCarpani } from "../src/state.js";
 import { ZORLUK } from "../src/config.js";
 import { ownerBakimToplami } from "../src/units.js";
+import { ownerTurGeliri } from "../src/ekonomi.js";
+
+// Deterministik koşular için seed'li PRNG (mulberry32).
+// --seed verildiğinde Math.random bu üreteçle değiştirilir; aynı seed + aynı
+// parametreler her zaman aynı sonucu verir (dengeleme regresyonu yakalanabilir).
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 const OWNERLER = Object.freeze(["biz", "ai1", "ai2", "ai3"]);
 const KPI_TURLARI = Object.freeze([20, 40, 60]);
@@ -56,10 +70,8 @@ function ownerToplamBirim(owner) {
 }
 
 function ownerGelir(owner) {
-  return ownerBolgeListesi(owner).reduce(
-    (toplam, b) => toplam + (sayi(b.gelir) * (1 + sayi(b.yGel) * 0.5)),
-    0
-  );
+  // Oyunun GERÇEK gelir formülü (lider/kriz/bina/araştırma/haraç dahil) — ekonomi.js
+  return ownerTurGeliri(owner).toplam;
 }
 
 function ownerUretim(owner, zorlukAyari) {
@@ -171,6 +183,7 @@ function main() {
   const turSayisi = intArg(args, "turns", 80);
   const runSayisi = intArg(args, "runs", 20);
   const zorluk = strArg(args, "difficulty", "orta");
+  const seed = intArg(args, "seed", 1);
 
   if (!ZORLUK[zorluk]) {
     throw new Error(`Geçersiz zorluk: ${zorluk}. Seçenekler: ${Object.keys(ZORLUK).join(", ")}`);
@@ -178,6 +191,7 @@ function main() {
 
   const kosular = [];
   for (let i = 0; i < runSayisi; i += 1) {
+    Math.random = mulberry32(seed + i * 1000003);
     kosular.push(runSimulasyon({ turSayisi, zorluk }));
   }
 
@@ -198,6 +212,27 @@ function main() {
       `T${k.tur}: Net ${satirYuvarla(k.netGelir)} ₺ | Para ${satirYuvarla(k.para)} ₺ | Birim ${satirYuvarla(k.birim)}`
     );
   });
+
+  // === ASSERT'LER — ihlalde çıkış kodu 1 (CI/regresyon yakalayabilsin) ===
+  const minNet = Number(args["--min-net"] ?? 0);
+  const minBirim = Number(args["--min-birim"] ?? 1);
+  const hatalar = [];
+  if (!Number.isFinite(ortNet)) hatalar.push("Ortalama net gelir sayı değil (NaN/Infinity).");
+  else if (ortNet < minNet) hatalar.push(`Ortalama net gelir ${satirYuvarla(ortNet)} < beklenen minimum ${minNet}.`);
+  if (!Number.isFinite(ortPara)) hatalar.push("Ortalama para sayı değil.");
+  if (!Number.isFinite(ortBirim) || ortBirim < minBirim) {
+    hatalar.push(`Ortalama birim ${satirYuvarla(ortBirim)} < beklenen minimum ${minBirim}.`);
+  }
+  kosular.forEach((k, i) => {
+    if (k.bizBolge < 1) hatalar.push(`Koşu ${i + 1}: oyuncunun hiç bölgesi kalmamış.`);
+  });
+
+  if (hatalar.length) {
+    console.error("\n❌ SİMÜLASYON ASSERT HATALARI:");
+    hatalar.forEach((h) => console.error(` - ${h}`));
+    process.exit(1);
+  }
+  console.log(`\n✅ Assert'ler geçti (seed: ${seed} — aynı seed aynı sonucu üretir).`);
 }
 
 main();

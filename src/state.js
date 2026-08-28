@@ -42,7 +42,29 @@ export function ekonomiDurumuTamamla(ekonomi) {
   };
 }
 
-function ownerOrtalamaSadakat(owner) {
+// Tek kanonik normalizer'lar: oyun.ekonomi / oyun.asayis alanlarını yerinde
+// tamamlar ve döndürür (eskiden actions/main/ui/save'de ayrı kopyalar vardı).
+export function ekonomiDurumu() {
+  const d = ekonomiDurumuTamamla(oyun.ekonomi);
+  if (!oyun.ekonomi || typeof oyun.ekonomi !== "object") oyun.ekonomi = d;
+  else Object.assign(oyun.ekonomi, d);
+  return oyun.ekonomi;
+}
+
+export function asayisDurumuTamamla(kaynak) {
+  const a = (kaynak && typeof kaynak === "object") ? kaynak : {};
+  a.sucluluk = Number(a.sucluluk) || 0;
+  a.polisBaski = Number(a.polisBaski) || 0;
+  if (!Number.isFinite(a.sonBaskinTur)) a.sonBaskinTur = -999;
+  return a;
+}
+
+export function asayisDurumu() {
+  oyun.asayis = asayisDurumuTamamla(oyun.asayis);
+  return oyun.asayis;
+}
+
+export function ownerOrtalamaSadakat(owner) {
   const bolgeler = (oyun.bolgeler || []).filter((b) => b.owner === owner);
   if (!bolgeler.length) return 55;
   const toplam = bolgeler.reduce((t, b) => t + (Number(b.sadakat) || 55), 0);
@@ -467,12 +489,6 @@ export function kullanilabilirBiz() {
     .reduce((t, k) => t + k.adet, 0);
 }
 
-// Haritadaki “o anda bulunan” adam (hazır birlik + konvoylar) — renk bazlı
-export function bulunanSayisi(bolgeId, owner) {
-  return oyun.birimler
-    .filter((k) => k.konumId === bolgeId && k.owner === owner)
-    .reduce((t, k) => t + k.adet, 0);
-}
 export function sohretCarpani(kime = "biz") {
   const s = Math.max(0, Math.min(100, oyun.sohret[kime] || 0));
   // 1 + s*0.01  → 0'da 1.00x, 100'de 2.00x
@@ -562,14 +578,6 @@ export function yiginaEkle(bolgeId, owner, adet, tip = "tetikci", secenekler = n
   oyun.birimler.push(yeni);
   return eklenecek;
 }
-export function yigindanAl(bolgeId, owner, adet) {
-  const y = yiginBul(bolgeId, owner);
-  if (!y || y.adet < adet) return false;
-  y.adet -= adet;
-  if (y.adet <= 0) y._sil = true;
-  return true;
-}
-
 export function legacyGarnizonlariBirimlereAktar() {
   oyun.bolgeler.forEach((bolge) => {
     const legacy = Math.max(0, Math.floor(Number(bolge?.garnizon) || 0));
@@ -580,8 +588,3 @@ export function legacyGarnizonlariBirimlereAktar() {
   });
 }
 
-export function tileToplam(owner, bolgeId) {
-  return oyun.birimler
-    .filter((k) => k.owner === owner && k.konumId === bolgeId)
-    .reduce((t, k) => t + k.adet, 0);
-}

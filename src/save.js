@@ -7,8 +7,11 @@ import {
   bolgeMapTemizle,
   diplomasiDurumuTamamla,
   ekonomiDurumuTamamla,
+  asayisDurumuTamamla,
+  legacyGarnizonlariBirimlereAktar,
 } from "./state.js";
-import { istatistik } from "./stats.js";
+import { istatistik, istatistikSifirla } from "./stats.js";
+import { adTemizle } from "./utils.js";
 
 const VERIYON = 8;
 const SLOT_ANAHTARI = (slot) => `mafya-kayit-slot-${slot}`;
@@ -20,47 +23,6 @@ function birimSayacHesapla(yuklenenOyun) {
     if (eslesme) sayac = Math.max(sayac, Number(eslesme[1]));
   });
   return sayac;
-}
-
-function legacyGarnizonlariBirimlereTasi(yuklenenOyun) {
-  if (!Array.isArray(yuklenenOyun?.bolgeler)) return;
-  if (!Array.isArray(yuklenenOyun.birimler)) yuklenenOyun.birimler = [];
-  let sayac = birimSayacHesapla(yuklenenOyun);
-
-  yuklenenOyun.bolgeler.forEach((bolge) => {
-    const legacy = Math.max(0, Math.floor(Number(bolge?.garnizon) || 0));
-    if (legacy > 0 && bolge.owner && bolge.owner !== "tarafsiz") {
-      const tip = bolge.baslangicBirimTipi || "tetikci";
-      const mevcut = yuklenenOyun.birimler.find(
-        (birim) =>
-          birim.owner === bolge.owner &&
-          birim.konumId === bolge.id &&
-          (birim.tip || "tetikci") === tip &&
-          !birim._sil &&
-          !birim.hedefId &&
-          (!birim.rota || birim.rota.length === 0)
-      );
-      if (mevcut) {
-        mevcut.adet = Math.max(0, Math.floor(Number(mevcut.adet) || 0)) + legacy;
-      } else {
-        yuklenenOyun.birimler.push({
-          id: `k${++sayac}`,
-          owner: bolge.owner,
-          adet: legacy,
-          tip,
-          konumId: bolge.id,
-          hedefId: null,
-          rota: [],
-          durum: "bekle",
-          gecisHakki: false,
-          operasyonId: null,
-          bekliyor: false,
-        });
-      }
-    }
-    if (bolge && Object.prototype.hasOwnProperty.call(bolge, "garnizon")) delete bolge.garnizon;
-  });
-  yuklenenOyun.birimSayac = Math.max(sayac, Math.floor(Number(yuklenenOyun.birimSayac) || 1));
 }
 
 function oyunDurumuNormallestir(yuklenenOyun) {
@@ -78,7 +40,10 @@ function oyunDurumuNormallestir(yuklenenOyun) {
   if (!Array.isArray(yuklenenOyun.operasyonlar)) yuklenenOyun.operasyonlar = [];
   if (!Array.isArray(yuklenenOyun.birimler)) yuklenenOyun.birimler = [];
   yuklenenOyun.birimler = yuklenenOyun.birimler.map((birim) => hazirlaBirimDurumu(birim));
-  legacyGarnizonlariBirimlereTasi(yuklenenOyun);
+  // Eski `bolge.garnizon` alanının stack'lere taşınması oyunYukle içinde,
+  // state'in kanonik legacyGarnizonlariBirimlereAktar()'ı ile yapılır
+  // (eskiden buradaki kopya personel tavanını atlıyordu).
+  yuklenenOyun.birimSayac = birimSayacHesapla(yuklenenOyun);
   yuklenenOyun.operasyonlar = yuklenenOyun.operasyonlar
     .filter((op) => op && typeof op === "object")
     .map((op) => ({
@@ -112,18 +77,15 @@ function oyunDurumuNormallestir(yuklenenOyun) {
       propaganda: { seviye: 0, puan: 0 },
     };
   }
-  if (!yuklenenOyun.asayis || typeof yuklenenOyun.asayis !== "object") {
-    yuklenenOyun.asayis = { sucluluk: 0, polisBaski: 0, sonBaskinTur: -999 };
-  }
-  yuklenenOyun.asayis.sucluluk = Number(yuklenenOyun.asayis.sucluluk) || 0;
-  yuklenenOyun.asayis.polisBaski = Number(yuklenenOyun.asayis.polisBaski) || 0;
-  if (!Number.isFinite(yuklenenOyun.asayis.sonBaskinTur)) yuklenenOyun.asayis.sonBaskinTur = -999;
+  yuklenenOyun.asayis = asayisDurumuTamamla(yuklenenOyun.asayis);
   if (!yuklenenOyun.sohret) yuklenenOyun.sohret = { biz: 0, ai1: 0, ai2: 0, ai3: 0 };
   if (!yuklenenOyun.fraksiyon) yuklenenOyun.fraksiyon = {};
   // Fraksiyon araç havuzu normalizasyonu (eski kayıt uyumluluğu)
   ["biz", "ai1", "ai2", "ai3"].forEach((owner) => {
     const fr = yuklenenOyun.fraksiyon[owner];
     if (!fr) return;
+    // localStorage'a başka yoldan yazılmış zararlı adlar innerHTML'e ulaşmasın
+    fr.ad = adTemizle(fr.ad) || owner;
     if (!fr.tasit || typeof fr.tasit !== "object") fr.tasit = { araba: 4, motor: 6 };
     fr.tasit.araba = Math.max(0, Math.floor(Number(fr.tasit.araba) || 0));
     fr.tasit.motor = Math.max(0, Math.floor(Number(fr.tasit.motor) || 0));
@@ -197,13 +159,13 @@ export function kayitBilgisi(slot = 0) {
     const raw = localStorage.getItem(SLOT_ANAHTARI(slot));
     if (!raw) return null;
     const k = JSON.parse(raw);
-    if (!k || k.versiyon > VERIYON) return null;
+    if (!k || !Number.isFinite(Number(k.versiyon)) || k.versiyon > VERIYON) return null;
     return k.ozet
       ? {
-          ceteAdi: k.ozet.ceteAdi,
+          ceteAdi: adTemizle(k.ozet.ceteAdi) || "Bilinmiyor",
           tur: k.ozet.tur,
           bolge: k.ozet.bolge,
-          zorluk: k.ozet.zorluk,
+          zorluk: k.ozet.zorluk || "orta",
           tarih: k.tarih,
         }
       : null;
@@ -228,7 +190,7 @@ export function oyunYukle(slot = 0) {
     const raw = localStorage.getItem(SLOT_ANAHTARI(slot));
     if (!raw) return false;
     const k = JSON.parse(raw);
-    if (!k || k.versiyon > VERIYON) return false;
+    if (!k || !Number.isFinite(Number(k.versiyon)) || k.versiyon > VERIYON) return false;
 
     const yuklenenOyun = oyunDurumuNormallestir(JSON.parse(k.oyunDurumu));
     const yuklenenIstat = k.istatistikDurumu ? JSON.parse(k.istatistikDurumu) : null;
@@ -236,8 +198,10 @@ export function oyunYukle(slot = 0) {
     // oyun objesine tüm field'ları kopyala
     Object.assign(oyun, yuklenenOyun);
     bolgeMapTemizle();
+    legacyGarnizonlariBirimlereAktar();
 
-    // istatistik objesine kopyala
+    // istatistik: önce eski oyunun izlerini temizle, sonra kayıttakini geri yükle
+    istatistikSifirla();
     if (yuklenenIstat) {
       Object.assign(istatistik, yuklenenIstat);
     }
@@ -261,6 +225,12 @@ export function kayitSil(slot = 0) {
  */
 export function otomatikKaydet() {
   if (oyun.tur > 0 && oyun.tur % 10 === 0) {
-    oyunKaydet(0);
+    const basarili = oyunKaydet(0);
+    if (!basarili) {
+      // localStorage kotası dolduğunda otokayıt sessizce ölmesin
+      import("./modal.js")
+        .then((m) => m.showToast("⚠️ Otomatik kayıt başarısız — depolama dolu olabilir.", "hata", 4000))
+        .catch(() => {});
+    }
   }
 }

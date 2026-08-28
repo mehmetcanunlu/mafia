@@ -1,6 +1,7 @@
 // Custom Modal ve Toast sistemi — Faz 3
 
 import { oyun } from "./state.js";
+import { htmlKacir } from "./utils.js";
 
 function ensureContainers() {
   if (!document.getElementById('cm-arka')) {
@@ -77,6 +78,8 @@ function modalKapanincaOtomatikDevamEt(modalBuAcilistaDuraklatti, promise) {
   const devam = () => {
     queueMicrotask(() => {
       if (!oyun) return;
+      // Oyuncu modal açıkken elle duraklattıysa (duraklatDevam), niyetine saygı göster
+      if (oyun._manuelDuraklatma) return;
       oyun.duraklat = false;
       document.dispatchEvent(new CustomEvent("ui:modal-unpause"));
     });
@@ -148,7 +151,7 @@ export function showPrompt(mesaj, baslik = 'Giriş', varsayilan = '') {
     html: `
       <div class="cm-baslik">${baslik}</div>
       <div class="cm-icerik">${mesaj}</div>
-      <input class="cm-input" type="text" value="${varsayilan}" />
+      <input class="cm-input" type="text" value="${htmlKacir(varsayilan)}" />
       <div class="cm-butonlar">
         <button class="buton grimsi cm-iptal">İptal</button>
         <button class="buton cm-tamam">Tamam</button>

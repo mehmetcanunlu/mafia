@@ -82,12 +82,6 @@ export const TASIT_TIPLERI = {
   },
 };
 
-export function tasitKapasitesi(tasit) {
-  if (!tasit) return 0;
-  return (tasit.araba || 0) * TASIT_TIPLERI.araba.kapasite +
-    (tasit.motor || 0) * TASIT_TIPLERI.motor.kapasite;
-}
-
 /**
  * Belirli kişi sayısını taşımak için uygun araç kombinasyonu bulur.
  * En az araç adedi ile, eşitlikte en az kapasite taşması seçilir.
@@ -116,21 +110,10 @@ export function tasitKombinasyonuBul(kisi, arabaVar, motorVar) {
   return enIyi ? { araba: enIyi.araba, motor: enIyi.motor, kapasite: enIyi.kapasite } : null;
 }
 
-/** Birimin etkin saldırı gücünü döndürür */
-export function birimEfektifSaldiri(birim) {
-  const tipBilgi = BIRIM_TIPLERI[birim.tip] || BIRIM_TIPLERI.tetikci;
-  return birim.adet * tipBilgi.saldiri;
-}
-
 /** Birimin etkin savunma gücünü döndürür */
 export function birimEfektifSavunma(birim) {
   const tipBilgi = BIRIM_TIPLERI[birim.tip] || BIRIM_TIPLERI.tetikci;
   return birim.adet * tipBilgi.savunma;
-}
-
-/** Birim grubunun toplam efektif saldırı gücü */
-export function grupEfektifSaldiri(birimGrubu) {
-  return birimGrubu.reduce((t, b) => t + birimEfektifSaldiri(b), 0);
 }
 
 /** Birim grubunun toplam efektif savunma gücü */
@@ -225,22 +208,6 @@ export function egitimTick() {
   });
 
   oyun.birimler = oyun.birimler.filter((b) => !b._sil && b.adet > 0);
-}
-
-/**
- * Eski motorlu hız mekanizması geriye dönük uyumluluk için no-op.
- * Hareket artık araç kapasitesiyle yönetiliyor.
- */
-export function motorluHizTick() {
-  return;
-}
-
-/** Birim tipinin kısa açıklamasını döndürür */
-export function tipKartHTML(tipAd) {
-  const t = BIRIM_TIPLERI[tipAd];
-  if (!t) return "";
-  return `<span style="font-size:18px">${t.ikon}</span> <strong>${t.ad}</strong><br>
-    <small style="color:#aaa">${t.aciklama}</small>`;
 }
 
 export function birimBakimGideri(birim) {
