@@ -103,13 +103,6 @@ export function bolgeTasitIadeEt(bolgeVeyaId, araba = 0, motor = 0) {
   ownerTasitIade(owner, araba, motor);
 }
 
-export function bolgeTasitDurumu(bolgeVeyaId) {
-  const owner = ownerCoz(bolgeVeyaId);
-  if (!owner || owner === "tarafsiz") return { araba: 0, motor: 0 };
-  const tasit = ownerTasit(owner);
-  return { araba: tasit.araba || 0, motor: tasit.motor || 0 };
-}
-
 function tasitKombinasyonuBul(kisi, arabaVar, motorVar) {
   let enIyi = null;
   for (let araba = 0; araba <= Math.max(0, arabaVar); araba++) {

@@ -9,6 +9,7 @@ import { BIRIM_TIPLERI, TASIT_TIPLERI, ownerBakimToplami } from "./units.js";
 import { ARASTIRMA_DALLARI } from "./research.js";
 import { konvoyBaslaAnimasyonu } from "./animations.js";
 import { gucPuani } from "./gucDengesi.js";
+import { liderBonus, bolgeOzellikBonus as bolgeBonus, binaBonus } from "./ekonomi.js";
 import {
   ownerTasit,
   ownerTasitAyir,
@@ -27,22 +28,7 @@ import {
   isDostIttifak,
 } from "./diplomasi.js";
 
-function liderBonus(owner, tip) {
-  return oyun.fraksiyon?.[owner]?.lider?.bonus?.[tip] || 0;
-}
-
-function bolgeBonus(b, tip) {
-  if (!b.ozellik) return 0;
-  const oz = BOLGE_OZELLIKLERI[b.ozellik];
-  return oz ? (oz[tip] || 0) : 0;
-}
-
-function binaBonus(b, tip) {
-  return (b.binalar || []).reduce((toplam, kayit) => {
-    const tanim = BINA_TIPLERI[kayit.tip];
-    return toplam + ((tanim?.etkiler?.[tip] || 0) * (kayit.seviye || 1));
-  }, 0);
-}
+// liderBonus / bolgeBonus / binaBonus artık ekonomi.js'ten geliyor (tek kaynak).
 
 function aiArastirmaDurumu(fr) {
   const dalIdleri = Object.keys(ARASTIRMA_DALLARI);

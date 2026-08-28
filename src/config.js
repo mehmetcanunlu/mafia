@@ -105,8 +105,6 @@ export const MEKANIK = {
   bribeEnemyPerGarnizon: 80, // +80 * garnizon
   bribeEnemyAdjBonus: -40, // her komşu kendi bölgem için -40 indirim
   bribeMinGarrison: 8, // teslim sonrası min garnizon
-  neutralMilitiaDiv: 25, // tarafsız savunma: nüfus / 25
-  neutralMilitiaGuv: 2, // tarafsız savunma: güvenlik * 2 ek
 };
 
 // === LİDERLER ===
@@ -187,52 +185,6 @@ export const GOREV_AYAR = {
   maxAktif: 2,
 };
 
-// Grid komşuluk üretimi (4x4/5x5)
-export function uretKomsulukGrid(n) {
-  const komsu = {};
-  const id = (r, c) => `r${r}c${c}`;
-  for (let r = 0; r < n; r++) {
-    for (let c = 0; c < n; c++) {
-      const me = id(r, c);
-      komsu[me] = [];
-      if (r > 0) komsu[me].push(id(r - 1, c));
-      if (r < n - 1) komsu[me].push(id(r + 1, c));
-      if (c > 0) komsu[me].push(id(r, c - 1));
-      if (c < n - 1) komsu[me].push(id(r, c + 1));
-    }
-  }
-  return komsu;
-}
-
-// Bölge isimleri
-const ISIMLER = [
-  "Okul",
-  "Sanayi",
-  "Fındıklı",
-  "Gecekondu",
-  "Zengin Semt",
-  "Merkez",
-  "Eski Şehir",
-  "Başıbüyük",
-  "Zümrütevler",
-  "Yenipazar",
-  "Çarşı",
-  "Tersane",
-  "Sahil",
-  "Stadyum",
-  "Yıldırım",
-  "Gülsuyu",
-  "Hastane",
-  "Bankacılar",
-  "Çağlayan",
-  "Parklar",
-  "Otogar",
-  "Sarıgazi",
-  "Gazi",
-  "Depo",
-  "Fikirtepe",
-];
-
 // Başlangıç fraksiyonları (zorluk etkili)
 export function BASLANGIC_FRAKSIYONLAR(zorluk) {
   const z = ZORLUK[zorluk];
@@ -266,67 +218,6 @@ export function BASLANGIC_FRAKSIYONLAR(zorluk) {
       tasit: { araba: 4, motor: 8 },
     },
   };
-}
-
-// Başlangıç bölgeleri (n=4/5)
-export function BASLANGIC_BOLGELER(n, zorluk) {
-  const z = ZORLUK[zorluk];
-  const bolgeler = [];
-  const total = n * n;
-  const rnd = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
-
-  // Özel bölge indexleri rastgele seç (toplam 4-5 tanesi)
-  const ozellikler = ["liman", "fabrika", "hastane", "kale", "gecekondu", "kumarhane", "depo", "carsi", "universite"];
-  const ozellikIdx = new Set();
-  while (ozellikIdx.size < Math.min(ozellikler.length, total)) {
-    ozellikIdx.add(rnd(0, total - 1));
-  }
-  const ozellikList = [...ozellikIdx];
-
-  for (let i = 0; i < total; i++) {
-    const ad = ISIMLER[i] || `Bölge ${i + 1}`;
-    const gelir = rnd(5, 15);
-    const guv = Math.max(1, rnd(2, 6) + (z.aiGuvBonus || 0));
-    const nufus = rnd(60, 140);
-    // Özel bölge mi?
-    const ozIdx = ozellikList.indexOf(i);
-    const ozellik = ozIdx >= 0 ? ozellikler[ozIdx] : null;
-    bolgeler.push({
-      id: `r${Math.floor(i / n)}c${i % n}`,
-      ad,
-      gelir,
-      guv,
-      nufus,
-      nufusMax: nufus,
-      owner: "tarafsiz",
-      garnizon: Math.max(3, Math.round(nufus / 25)),
-      yGel: 0,
-      yGuv: 0,
-      yAdam: 0,
-      ozellik, // null | "liman" | "fabrika" | "hastane" | "kale"
-      baslangicBirimTipi: "tetikci",
-    });
-  }
-
-  const center = `r${Math.floor(n / 2)}c${Math.floor(n / 2)}`;
-  const ai1 = "r0c0";
-  const ai2 = `r${n - 1}c${n - 1}`;
-
-  bolgeler.find((b) => b.id === center).owner = "biz";
-  bolgeler.find((b) => b.id === center).garnizon = 4;
-
-  const b1 = bolgeler.find((b) => b.id === ai1);
-  if (b1) { b1.owner = "ai1"; b1.garnizon = Math.max(8, Math.round(b1.nufus / 20)); }
-
-  const b2 = bolgeler.find((b) => b.id === ai2);
-  if (b2) { b2.owner = "ai2"; b2.garnizon = Math.max(8, Math.round(b2.nufus / 20)); }
-
-  // AI3: Sağ üst köşe (r0, c_max) veya sol alt (r_max, c0)
-  const ai3 = `r0c${n - 1}`;
-  const b3 = bolgeler.find((b) => b.id === ai3);
-  if (b3) { b3.owner = "ai3"; b3.garnizon = Math.max(8, Math.round(b3.nufus / 20)); }
-
-  return bolgeler;
 }
 
 // En alta ekle (veya uygun bir yere):

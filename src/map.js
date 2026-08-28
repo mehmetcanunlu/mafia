@@ -30,20 +30,3 @@ export function kisaRota(basId, hedefId) {
   return null;
 }
 
-/* --- YENİ: owner’a ait en yakın güvenli bölgeyi bul --- */
-export function enYakinGuvenli(basId, owner) {
-  if (!owner) return null;
-  const vis = new Set([basId]);
-  const q = [basId];
-  while (q.length) {
-    const u = q.shift();
-    for (const v of oyun.komsu[u] || []) {
-      if (vis.has(v)) continue;
-      vis.add(v);
-      const b = oyun.bolgeler.find((x) => x.id === v);
-      if (b && b.owner === owner) return v; // ilk bulunan en yakındır
-      q.push(v);
-    }
-  }
-  return null; // hiç bölge yok ise
-}

@@ -1,5 +1,3 @@
-import { MEKANIK } from "./config.js";
-
 export function savasKazanmaIhtimali(saldiran, savunan, guv) {
   // Savunan yoksa otomatik zafer
   if (savunan <= 0) return 1.0;
@@ -21,14 +19,6 @@ export function savasKazanmaIhtimali(saldiran, savunan, guv) {
   if (ihtimal > 0.95) ihtimal = 0.95;
 
   return ihtimal;
-}
-
-export function neutralSavunma(nufus, guv) {
-  return Math.max(
-    3,
-    Math.ceil(nufus / MEKANIK.neutralMilitiaDiv) +
-    guv * MEKANIK.neutralMilitiaGuv
-  );
 }
 
 export function saldiriMaliyeti(

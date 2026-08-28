@@ -30,18 +30,30 @@ import { olayTick, krizCarpani } from "./events.js";
 import { gorevKontrol } from "./missions.js";
 import { savasAnimasyonu, elDegistirmeFlash, konvoyBaslaAnimasyonu } from "./animations.js";
 import { istatistikKaydet, istatistikGrafik } from "./stats.js";
-import { rastgeleIsim } from "./utils.js";
+import { rastgeleIsim, htmlKacir, adTemizle } from "./utils.js";
 import { showToast, showConfirm, showAlert } from "./modal.js";
 import { sesCal, sesDurumDegistir, sesAcikMi, muzikDurumDegistir, muzikAcikMi } from "./audio.js";
 import { oyunKaydet, oyunYukle, tumKayitlar, kayitSil, otomatikKaydet } from "./save.js";
 import { bolgeMapTemizle } from "./state.js";
 import { istatistikSifirla } from "./stats.js";
-import { egitimTick, motorluHizTick, BIRIM_TIPLERI, grupEfektifSavunma, ownerBakimToplami } from "./units.js";
+import { egitimTick, BIRIM_TIPLERI, grupEfektifSavunma, ownerBakimToplami } from "./units.js";
 import { sadakatTick, fetihSonrasiSadakat } from "./loyalty.js";
 import { arastirmaTick, arastirmaEfekt, arastirmaDurumunuDogrula } from "./research.js";
 import { liderDevreDisiMi } from "./spy.js";
 import { ownerTasitIade, bolgeFetihTasitGanmetiEkle } from "./logistics.js";
 import { tutorialArayuzKur, tutorialBaslat } from "../scripts/tutorial/tutorial.js";
+import { ekonomiDurumu, asayisDurumu, ownerOrtalamaSadakat } from "./state.js";
+import {
+  liderBonus,
+  bolgeOzellikBonus,
+  binaBonus,
+  geceEkonomiBonusu,
+  aktifHaracProfili,
+  haracGeliriHesapla,
+  ownerGelirBaglami,
+  bolgeTurGeliri,
+  ownerTurGeliri,
+} from "./ekonomi.js";
 import {
   diplomasiTick,
   diplomasiSaldiriMumkunMu,
@@ -63,6 +75,9 @@ if (typeof globalThis !== "undefined") {
 let baslangicSecimModu = false;
 let bekleyenBaslangicKurulumu = null;
 let modalPopupKuyrugu = Promise.resolve();
+let modalPopupBekleyen = 0;
+let modalPopupTasmaBildirildi = false;
+const MODAL_POPUP_KUYRUK_SINIRI = 12;
 
 document.addEventListener("ui:guncel", () => {
   ensureGameControls();
@@ -141,9 +156,23 @@ function diploPopupKuyrugaEkle(olay) {
 
 function popupKuyrugaEkle(gorev) {
   if (typeof gorev !== "function") return;
+  // Yoğun diplomasi turlarında oyuncuyu onlarca popup'a boğma: kuyruk sınırlı,
+  // taşan bildirimler Günlük'ten okunabilir. Hatalar da sessizce yutulmaz.
+  if (modalPopupBekleyen >= MODAL_POPUP_KUYRUK_SINIRI) {
+    if (!modalPopupTasmaBildirildi) {
+      modalPopupTasmaBildirildi = true;
+      logYaz("⚠️ Bildirim yoğunluğu: bazı diplomasi pencereleri atlandı (detaylar Günlük sekmesinde).");
+    }
+    return;
+  }
+  modalPopupBekleyen++;
   modalPopupKuyrugu = modalPopupKuyrugu
     .then(() => gorev())
-    .catch(() => undefined);
+    .catch((err) => console.error("[diploPopup] kuyruk görevi:", err))
+    .finally(() => {
+      modalPopupBekleyen--;
+      if (modalPopupBekleyen === 0) modalPopupTasmaBildirildi = false;
+    });
 }
 
 function ownerListesi(owner) {
@@ -1092,10 +1121,10 @@ function dongu() {
 export { rastgeleIsim } from "./utils.js";
 
 function modalAyarlariniOku() {
-  const ad = (document.getElementById("isim-input")?.value || "").trim() || rastgeleIsim();
-  const ai1Ad = (document.getElementById("isim-ai1")?.value || "").trim() || rastgeleIsim();
-  const ai2Ad = (document.getElementById("isim-ai2")?.value || "").trim() || rastgeleIsim();
-  const ai3Ad = (document.getElementById("isim-ai3")?.value || "").trim() || rastgeleIsim();
+  const ad = adTemizle(document.getElementById("isim-input")?.value) || rastgeleIsim();
+  const ai1Ad = adTemizle(document.getElementById("isim-ai1")?.value) || rastgeleIsim();
+  const ai2Ad = adTemizle(document.getElementById("isim-ai2")?.value) || rastgeleIsim();
+  const ai3Ad = adTemizle(document.getElementById("isim-ai3")?.value) || rastgeleIsim();
   const zor = document.getElementById("zorluk")?.value || "orta";
   return {
     zorluk: zor,
@@ -1117,6 +1146,7 @@ function oyunKurulumunuBaslat(kurulum, seciliBaslangicId = null) {
     baslangicKonumlari: seciliBaslangicId ? { biz: seciliBaslangicId } : null,
     fraksiyonAdlari: kurulum.fraksiyonAdlari,
   });
+  istatistikSifirla(); // önceki oyunun grafik geçmişi yeni oyuna taşınmasın
   baslangicSecimModu = false;
   bekleyenBaslangicKurulumu = null;
   isimModalKapat();
@@ -1153,6 +1183,7 @@ function haritadanBaslangicSecimiBaslat() {
     mapSize: kurulum.mapSize,
     fraksiyonAdlari: kurulum.fraksiyonAdlari,
   });
+  istatistikSifirla();
   isimModalKapat();
   document.getElementById("efs-biz").textContent = oyun.fraksiyon.biz.ad;
   document.getElementById("efs-ai1").textContent = oyun.fraksiyon.ai1.ad;
@@ -1245,74 +1276,13 @@ async function onBolgeSec(id, secimOps = {}) {
   uiGuncel(callbacklar);
 }
 
-function liderBonus(owner, bonusTip) {
-  const lider = oyun.fraksiyon[owner]?.lider;
-  if (!lider || !lider.bonus) return 0;
-  return lider.bonus[bonusTip] || 0;
-}
-
-function bolgeOzellikBonus(b, bonusTip) {
-  if (!b.ozellik) return 0;
-  const oz = BOLGE_OZELLIKLERI[b.ozellik];
-  return oz ? (oz[bonusTip] || 0) : 0;
-}
-
-function binaBonus(b, bonusTip) {
-  if (!Array.isArray(b?.binalar)) return 0;
-  return b.binalar.reduce((toplam, kayit) => {
-    const tanim = BINA_TIPLERI[kayit.tip];
-    const etki = tanim?.etkiler?.[bonusTip] || 0;
-    return toplam + etki * (kayit.seviye || 1);
-  }, 0);
-}
-
-function ekonomiDurumu() {
-  if (!oyun.ekonomi || typeof oyun.ekonomi !== "object") {
-    oyun.ekonomi = { haracSeviye: "orta", alimBuTur: 0, sonHaracGeliri: 0, personelTavanEk: 0 };
-  }
-  if (!EKONOMI_DENGE.haracSeviyeleri[oyun.ekonomi.haracSeviye]) oyun.ekonomi.haracSeviye = "orta";
-  if (!Number.isFinite(oyun.ekonomi.alimBuTur)) oyun.ekonomi.alimBuTur = 0;
-  if (!Number.isFinite(oyun.ekonomi.sonHaracGeliri)) oyun.ekonomi.sonHaracGeliri = 0;
-  if (!Number.isFinite(oyun.ekonomi.personelTavanEk)) oyun.ekonomi.personelTavanEk = 0;
-  return oyun.ekonomi;
-}
-
-function asayisDurumuMain() {
-  if (!oyun.asayis || typeof oyun.asayis !== "object") {
-    oyun.asayis = { sucluluk: 0, polisBaski: 0, sonBaskinTur: -999 };
-  }
-  if (!Number.isFinite(oyun.asayis.sucluluk)) oyun.asayis.sucluluk = 0;
-  if (!Number.isFinite(oyun.asayis.polisBaski)) oyun.asayis.polisBaski = 0;
-  if (!Number.isFinite(oyun.asayis.sonBaskinTur)) oyun.asayis.sonBaskinTur = -999;
-  return oyun.asayis;
-}
-
-function bizOrtalamaSadakat(bizBolgeler) {
-  if (!bizBolgeler.length) return 55;
-  const toplam = bizBolgeler.reduce((t, b) => t + (Number(b.sadakat) || 55), 0);
-  return toplam / bizBolgeler.length;
-}
-
-function aktifHaracProfili() {
-  const seviye = ekonomiDurumu().haracSeviye || "orta";
-  return EKONOMI_DENGE.haracSeviyeleri[seviye] || EKONOMI_DENGE.haracSeviyeleri.orta;
-}
-
-function haracGeliriHesapla(bizBolgeler, harac) {
-  const taban = bizBolgeler.reduce((toplam, b) => {
-    const gelirTabani = (b.gelir || 0) * EKONOMI_DENGE.haracGelirOrani;
-    const nufusKatkisi = (b.nufus || 0) * EKONOMI_DENGE.haracNufusCarpani;
-    const yatirimCarpani = 1 + (b.yGel || 0) * EKONOMI_DENGE.haracYatirimBonus;
-    return toplam + (gelirTabani + nufusKatkisi) * yatirimCarpani;
-  }, 0);
-  const arastirmaHaracBonus = Math.max(0, arastirmaEfekt("haracGelirBonus"));
-  return Math.max(0, Math.round(taban * (harac?.gelirCarpani || 1) * (1 + arastirmaHaracBonus)));
-}
+// liderBonus / bolgeOzellikBonus / binaBonus / harac hesapları artık ekonomi.js'te;
+// ekonomiDurumu / asayisDurumu / ownerOrtalamaSadakat state.js'te (tek kaynak).
 
 function oyuncuHaracTick(bizBolgeler) {
   const eco = ekonomiDurumu();
   const harac = aktifHaracProfili();
-  const as = asayisDurumuMain();
+  const as = asayisDurumu();
   const haracSadakatKoruma = Math.min(0.8, Math.max(0, arastirmaEfekt("haracSadakatCezaAzaltma")));
   const haracPolisKoruma = Math.min(0.8, Math.max(0, arastirmaEfekt("haracPolisArtisAzaltma")));
   const suclulukAzaltim = Math.min(0.7, Math.max(0, arastirmaEfekt("suclulukArtisAzaltma")));
@@ -1337,7 +1307,7 @@ function oyuncuHaracTick(bizBolgeler) {
   as.sucluluk = Math.max(0, Math.min(200, (as.sucluluk || 0) + suclulukDelta));
   as.polisBaski = Math.max(0, Math.min(100, (as.polisBaski || 0) + polisDelta));
 
-  const ortSad = bizOrtalamaSadakat(bizBolgeler);
+  const ortSad = ownerOrtalamaSadakat("biz");
   if (eco.haracSeviye === "yuksek" && ortSad < EKONOMI_DENGE.haracKrizSadakatEsigi) {
     const krizPolisEtkisi = EKONOMI_DENGE.haracKrizPolisEtkisi * (1 - haracPolisKoruma);
     const krizSadakatDarbe =
@@ -1354,12 +1324,6 @@ function oyuncuHaracTick(bizBolgeler) {
   if (oyun.tur % 5 === 0) {
     logYaz(`💸 Haraç geliri: +${gelir} ₺ (${harac.ad || eco.haracSeviye}).`);
   }
-}
-
-function geceEkonomiBonusu(b) {
-  if (b.owner !== "biz") return 0;
-  if (b.ozellik !== "kumarhane" && b.ozellik !== "carsi") return 0;
-  return arastirmaEfekt("geceEkonomiBonus");
 }
 
 function gencBirimiOlustur(owner, bolgeId, adet = 1) {
@@ -1382,21 +1346,11 @@ function gecekonduTick() {
 function oyuncuUretimTick() {
   const bizBolgeler = oyun.bolgeler.filter((b) => b.owner === "biz");
 
-  // Para üretimi (her tur) — lider + bölge + kriz bonusları dahil
-  const gelirLider = 1 + liderBonus("biz", "gelirCarpani");
-  const kriz = krizCarpani("biz");
-  const ekonomiGelirBonus = arastirmaEfekt("gelirBonus");
-  const pasifGelir = arastirmaEfekt("pasifGelir");
-  if (pasifGelir > 0) oyun.fraksiyon.biz.para += pasifGelir;
+  // Para üretimi (her tur) — formülün tek kaynağı ekonomi.js
+  const gelirBaglami = ownerGelirBaglami("biz");
+  if (gelirBaglami.pasifGelir > 0) oyun.fraksiyon.biz.para += gelirBaglami.pasifGelir;
   bizBolgeler.forEach((b) => {
-    const gelX = 1 + b.yGel * 0.5;
-    const bolgeBonus =
-      1 +
-      bolgeOzellikBonus(b, "gelirBonus") +
-      binaBonus(b, "gelirBonus") +
-      ekonomiGelirBonus +
-      geceEkonomiBonusu(b);
-    oyun.fraksiyon.biz.para += b.gelir * gelX * gelirLider * bolgeBonus * kriz;
+    oyun.fraksiyon.biz.para += bolgeTurGeliri(b, gelirBaglami);
   });
 
   oyuncuHaracTick(bizBolgeler);
@@ -1474,23 +1428,7 @@ const EKONOMI_KPI_HEDEFLERI = {
 };
 
 function bizTurEkonomiMetrikleri() {
-  const bizBolgeler = oyun.bolgeler.filter((b) => b.owner === "biz");
-  const gelirLider = 1 + liderBonus("biz", "gelirCarpani");
-  const kriz = krizCarpani("biz");
-  const arastirmaBonus = arastirmaEfekt("gelirBonus");
-  const pasifGelir = arastirmaEfekt("pasifGelir");
-  let gelir = pasifGelir;
-  bizBolgeler.forEach((b) => {
-    const gelX = 1 + (b.yGel || 0) * 0.5;
-    const bolgeBonus =
-      1 +
-      bolgeOzellikBonus(b, "gelirBonus") +
-      binaBonus(b, "gelirBonus") +
-      arastirmaBonus +
-      geceEkonomiBonusu(b);
-    gelir += (b.gelir || 0) * gelX * gelirLider * bolgeBonus * kriz;
-  });
-  gelir += haracGeliriHesapla(bizBolgeler, aktifHaracProfili());
+  const gelir = ownerTurGeliri("biz").toplam;
   const bakim = ownerBakimToplami("biz");
   const bakimOran = gelir > 0 ? (bakim / gelir) : (bakim > 0 ? 1 : 0);
 
@@ -1603,6 +1541,9 @@ function turIsle() {
       logYaz(`${isim} tüm şehri ele geçirdi. Oyun bitti.`);
       bitisBanner(`Oyun Bitti`, { tip: "ai-kazandi", kazananAd: isim });
     }
+    // Oyun bitti: zafer ekranından sonra fazladan bir tur işlenmesin
+    uiGuncel(callbacklar);
+    return;
   }
 
   // Ekonomi + üretim
@@ -1686,15 +1627,17 @@ function turIsle() {
     .reduce((toplam, b) => toplam + binaBonus(b, "arastirmaBonus"), 0);
   arastirmaTick(labBonus);    // Araştırma puanı biriktir → seviye atla
 
-  // İstatistik kaydet + otomatik kayıt (her 10 turda slot 0'a)
+  // İstatistik kaydet
   istatistikKaydet();
-  otomatikKaydet();
 
   // birliklerin varışı & savaş
   operasyonTick();
   hareketTick();
   ownerEliminasyonTick();
-  motorluHizTick();   // Eski mekanik: no-op (geriye dönük uyumluluk)
+
+  // Otomatik kayıt (her 10 turda slot 0'a) — tur TAMAMEN işlendikten sonra;
+  // aksi halde kayıttan dönüşte bu turun hareket/savaşları hiç çalışmadan atlanıyordu
+  otomatikKaydet();
   // kritik: pause butonu handler'ı düşmesin diye tam UI yenile
   uiGuncel(callbacklar);
 
@@ -1767,7 +1710,7 @@ function renderKayitMenu(ankorEl) {
 
     const solTaraf = document.createElement("div");
     if (bilgi) {
-      solTaraf.innerHTML = `<div style="color:#ddd;font-weight:600">Slot ${slot + 1} — ${bilgi.ceteAdi}</div>
+      solTaraf.innerHTML = `<div style="color:#ddd;font-weight:600">Slot ${slot + 1} — ${htmlKacir(bilgi.ceteAdi)}</div>
         <div style="color:#666;font-size:11px">Tur ${bilgi.tur} · ${bilgi.bolge} bölge · ${new Date(bilgi.tarih).toLocaleDateString("tr-TR")}</div>`;
     } else {
       solTaraf.innerHTML = `<div style="color:#555;font-style:italic">Slot ${slot + 1} — Boş</div>`;
@@ -1840,14 +1783,15 @@ function renderKayitSlotlari(onYukle) {
     const satir = document.createElement("div");
     satir.className = "kayit-slot";
 
-    const zorlukRenk = { kolay: "#2ecc71", orta: "#f39c12", zor: "#e74c3c" }[bilgi.zorluk] || "#aaa";
+    const zorluk = bilgi.zorluk || "orta";
+    const zorlukRenk = { kolay: "#2ecc71", orta: "#f39c12", zor: "#e74c3c" }[zorluk] || "#aaa";
 
     satir.innerHTML = `
       <div class="kayit-slot-bilgi">
-        <div class="kayit-slot-ad">Slot ${slot + 1} — ${bilgi.ceteAdi}</div>
+        <div class="kayit-slot-ad">Slot ${slot + 1} — ${htmlKacir(bilgi.ceteAdi)}</div>
         <div class="kayit-slot-detay">
           Tur ${bilgi.tur} · ${bilgi.bolge} bölge ·
-          <span style="color:${zorlukRenk}">${bilgi.zorluk.toUpperCase()}</span> ·
+          <span style="color:${zorlukRenk}">${htmlKacir(zorluk.toUpperCase())}</span> ·
           ${new Date(bilgi.tarih).toLocaleDateString("tr-TR")}
         </div>
       </div>
@@ -1870,9 +1814,8 @@ function isimAkisi() {
     baslangicSecimModu = false;
     bekleyenBaslangicKurulumu = null;
 
-    // Yükleme sonrası map cache ve istatistik canvas sıfırla
+    // Yükleme sonrası map cache sıfırla (istatistik oyunYukle içinde geri yüklenir)
     bolgeMapTemizle();
-    istatistikSifirla();
     arastirmaDurumunuDogrula();
 
     isimModalKapat();

@@ -6,9 +6,11 @@ import {
   rozetSayilari,
   ownerToplamPersonel,
   ownerPersonelTavan,
+  yiginaEkle,
 } from "./state.js";
 import { BOLGE_OZELLIKLERI, AYAR, BINA_TIPLERI, EKONOMI_DENGE, DIPLOMASI, liderAvatarUrl } from "./config.js";
 import { istatistikGrafik } from "./stats.js";
+import { htmlKacir } from "./utils.js";
 import { ISTANBUL_ILCELER, KOPRULER } from "./istanbul.js";
 import { sadakatRenk, sadakatEtiket } from "./loyalty.js";
 import { BIRIM_TIPLERI, TASIT_TIPLERI, ownerBakimToplami } from "./units.js";
@@ -23,7 +25,15 @@ import {
 } from "./research.js";
 import { kesifAktifMi, operasyonMumkunMu, kesifMaliyeti, suikastMaliyeti } from "./spy.js";
 import { ownerTasit, ownerToplamKapasite, ownerToplamTasit } from "./logistics.js";
-import { diplomasiOzet, iliskiDurumu, isDostIttifak } from "./diplomasi.js";
+import { diplomasiOzet, iliskiDurumu, isDostIttifak, iliskiDegistir, diplomasiSaldiriMumkunMu } from "./diplomasi.js";
+import { ekonomiDurumu, ownerOrtalamaSadakat } from "./state.js";
+import {
+  haracGeliriHesapla,
+  ownerTurGeliri,
+  geceEkonomiBonusu,
+  bolgeOzellikBonus as ekoBolgeOzellikBonus,
+  binaBonus as ekoBinaBonus,
+} from "./ekonomi.js";
 
 export function logYaz(msg) {
   const p = document.getElementById("log");
@@ -84,12 +94,20 @@ const ILCE_KISA_ADLAR = Object.freeze({
   beylikduzu: "B.Düzü",
   sultanbeyli: "S.Beyli",
 });
+const KONVOY_RENKLERI = Object.freeze({
+  biz: "#2ecc71",
+  ai1: "#e74c3c",
+  ai2: "#9b59b6",
+  ai3: "#f1c40f",
+  tarafsiz: "#95a5a6",
+});
 const HARITA_MODLARI = Object.freeze({
   siyasi: { ad: "Siyasi", tus: "1" },
   askeri: { ad: "Askeri", tus: "2" },
   ekonomik: { ad: "Ekonomik", tus: "3" },
+  lojistik: { ad: "Lojistik", tus: "4" },
 });
-const HARITA_MOD_SIRASI = Object.freeze(["siyasi", "askeri", "ekonomik"]);
+const HARITA_MOD_SIRASI = Object.freeze(["siyasi", "askeri", "ekonomik", "lojistik"]);
 let aktifHaritaModu = "siyasi";
 let haritaKisayolBagli = false;
 let duraklatKisayolBagli = false;
@@ -682,10 +700,94 @@ function istanbulZoomKontrolOlustur(svgKap, svg) {
   };
 }
 
+// === SÜRÜKLE-BIRAK BİRLİK HAREKETİ ===
+function birlikDragBaslat(svg, dragDurum) {
+  const NS = "http://www.w3.org/2000/svg";
+  svg.classList.add("birlik-drag-aktif");
+  // Geçerli hedefleri vurgula: dost bölgeler + saldırılabilir düşmanlar
+  oyun.bolgeler.forEach((b) => {
+    if (b.id === dragDurum.kaynakId) return;
+    const path = istanbulPathCache.get(b.id) || document.getElementById(`ilce-${b.id}`);
+    if (!path) return;
+    const uygun =
+      b.owner === "biz" ||
+      (b.owner !== "tarafsiz" && diplomasiSaldiriMumkunMu("biz", b.owner));
+    if (uygun) path.classList.add("drag-hedef-uygun");
+  });
+
+  let grup = document.getElementById("birlik-drag-goruntu");
+  if (grup) grup.remove();
+  grup = document.createElementNS(NS, "g");
+  grup.id = "birlik-drag-goruntu";
+  grup.setAttribute("pointer-events", "none");
+  svg.appendChild(grup);
+
+  const bas = bolgeMerkezi(dragDurum.kaynakId) || { cx: 0, cy: 0 };
+  const cizgi = document.createElementNS(NS, "line");
+  cizgi.setAttribute("class", "birlik-drag-cizgi");
+  cizgi.setAttribute("x1", bas.cx.toFixed(1));
+  cizgi.setAttribute("y1", bas.cy.toFixed(1));
+  cizgi.setAttribute("x2", bas.cx.toFixed(1));
+  cizgi.setAttribute("y2", bas.cy.toFixed(1));
+  grup.appendChild(cizgi);
+
+  const ghost = document.createElementNS(NS, "text");
+  ghost.setAttribute("class", "birlik-drag-ghost");
+  ghost.textContent = `🥷 ${bolgeHazirBirimSayisi(dragDurum.kaynakId, "biz")}`;
+  grup.appendChild(ghost);
+
+  dragDurum.cizgi = cizgi;
+  dragDurum.ghost = ghost;
+}
+
+function birlikDragGuncelle(svg, dragDurum, clientX, clientY) {
+  const dunya = istanbulEkranToDunya(svg, clientX, clientY);
+  if (dragDurum.cizgi && dunya) {
+    dragDurum.cizgi.setAttribute("x2", dunya.x.toFixed(1));
+    dragDurum.cizgi.setAttribute("y2", dunya.y.toFixed(1));
+  }
+  if (dragDurum.ghost && dunya) {
+    dragDurum.ghost.setAttribute("x", dunya.x.toFixed(1));
+    dragDurum.ghost.setAttribute("y", (dunya.y - 6).toFixed(1));
+  }
+  // İmleç altındaki geçerli hedefi vurgula (pointer capture'da e.target sabitlenir,
+  // bu yüzden elementFromPoint kullanılır)
+  const el = document.elementFromPoint(clientX, clientY);
+  const path = el?.closest?.(".ilce-path");
+  const hedefId = path?.getAttribute("data-id") || null;
+  const yeniHedef =
+    hedefId && hedefId !== dragDurum.kaynakId && path.classList.contains("drag-hedef-uygun")
+      ? hedefId
+      : null;
+  if (yeniHedef !== dragDurum.sonHedefId) {
+    if (dragDurum.sonHedefId) {
+      const eski = istanbulPathCache.get(dragDurum.sonHedefId);
+      if (eski) eski.classList.remove("drag-hedef-secili");
+    }
+    if (yeniHedef) {
+      const yeni = istanbulPathCache.get(yeniHedef);
+      if (yeni) yeni.classList.add("drag-hedef-secili");
+    }
+    dragDurum.sonHedefId = yeniHedef;
+  }
+}
+
+function birlikDragTemizle(svg) {
+  if (svg?.classList) svg.classList.remove("birlik-drag-aktif");
+  document.getElementById("birlik-drag-goruntu")?.remove();
+  document
+    .querySelectorAll("#istanbul-svg .drag-hedef-uygun, #istanbul-svg .drag-hedef-secili")
+    .forEach((p) => p.classList.remove("drag-hedef-uygun", "drag-hedef-secili"));
+}
+
 function istanbulEtkilesimBagla(svgKap, svg, onBolgeSec) {
   if (!svgKap || !svg) return;
   let drag = null;
   let tiklananBolgeId = null;
+  let birlikDrag = null;
+  // Dokunmatik: iki parmak pinch zoom + pan
+  const aktifDokunuslar = new Map();
+  let pinch = null;
 
   svg.addEventListener(
     "wheel",
@@ -700,15 +802,65 @@ function istanbulEtkilesimBagla(svgKap, svg, onBolgeSec) {
 
   svg.addEventListener("pointerdown", (e) => {
     if (e.button !== 0) return;
+    if (e.pointerType === "touch") {
+      aktifDokunuslar.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (aktifDokunuslar.size === 2) {
+        // İkinci parmak: tekil sürükleme/birlik hareketini iptal et, pinch'e geç
+        if (birlikDrag && birlikDrag.aktif) birlikDragTemizle(svg);
+        birlikDrag = null;
+        drag = null;
+        tiklananBolgeId = null;
+        svgKap.classList.remove("panning");
+        const [a, b] = [...aktifDokunuslar.values()];
+        pinch = {
+          mesafe: Math.hypot(a.x - b.x, a.y - b.y),
+          mx: (a.x + b.x) / 2,
+          my: (a.y + b.y) / 2,
+        };
+        try { svg.setPointerCapture(e.pointerId); } catch { /* pointer kaybolmuş olabilir */ }
+        return;
+      }
+    }
+    if (pinch) return;
     const hedefPath = e.target?.closest?.(".ilce-path");
     tiklananBolgeId = hedefPath?.getAttribute("data-id") || null;
+    // Kendi bölgemizden (hazır birlik varken) sürükleme birlik hareketi başlatır;
+    // Shift+sürükle her zaman pan yapar (kaçış yolu).
+    const basBolge = tiklananBolgeId ? bolgeById(tiklananBolgeId) : null;
+    if (
+      basBolge &&
+      basBolge.owner === "biz" &&
+      !e.shiftKey &&
+      bolgeHazirBirimSayisi(basBolge.id, "biz") > 0
+    ) {
+      birlikDrag = { kaynakId: basBolge.id, aktif: false, sonHedefId: null, cizgi: null, ghost: null };
+    } else {
+      birlikDrag = null;
+    }
     drag = { x: e.clientX, y: e.clientY, pointerId: e.pointerId };
     istanbulSuruklemePx = 0;
     svgKap.classList.add("panning");
-    svg.setPointerCapture(e.pointerId);
+    try { svg.setPointerCapture(e.pointerId); } catch { /* pointer kaybolmuş olabilir */ }
   });
 
   svg.addEventListener("pointermove", (e) => {
+    if (pinch && aktifDokunuslar.has(e.pointerId)) {
+      aktifDokunuslar.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (aktifDokunuslar.size >= 2) {
+        const [a, b] = [...aktifDokunuslar.values()];
+        const yeniMesafe = Math.hypot(a.x - b.x, a.y - b.y);
+        const mx = (a.x + b.x) / 2;
+        const my = (a.y + b.y) / 2;
+        if (yeniMesafe > 8 && pinch.mesafe > 8) {
+          const factor = pinch.mesafe / yeniMesafe; // parmaklar açılınca <1 → yakınlaş
+          const merkez = istanbulEkranToDunya(svg, mx, my);
+          istanbulZoomUygula(svg, factor, merkez);
+        }
+        istanbulPanUygula(svg, mx - pinch.mx, my - pinch.my);
+        pinch = { mesafe: yeniMesafe, mx, my };
+      }
+      return;
+    }
     if (!drag || e.pointerId !== drag.pointerId) return;
     const dx = e.clientX - drag.x;
     const dy = e.clientY - drag.y;
@@ -718,18 +870,45 @@ function istanbulEtkilesimBagla(svgKap, svg, onBolgeSec) {
     }
     drag.x = e.clientX;
     drag.y = e.clientY;
+    if (birlikDrag) {
+      if (!birlikDrag.aktif && istanbulSuruklemePx > ISTANBUL_TIK_SURUKLEME_ESIK) {
+        birlikDrag.aktif = true;
+        birlikDragBaslat(svg, birlikDrag);
+      }
+      if (birlikDrag.aktif) birlikDragGuncelle(svg, birlikDrag, e.clientX, e.clientY);
+      return; // birlik sürüklerken pan yapılmaz
+    }
     istanbulPanUygula(svg, dx, dy);
   });
 
   const dragBitir = (e) => {
+    if (e && e.pointerType === "touch") {
+      aktifDokunuslar.delete(e.pointerId);
+      if (pinch && aktifDokunuslar.size < 2) {
+        pinch = null;
+        istanbulEtiketFitPlanla(svg, 0);
+        return;
+      }
+    }
     if (!drag || (e && e.pointerId !== drag.pointerId)) return;
     const secimId = tiklananBolgeId;
     const shift = !!e?.shiftKey;
+    const bitenBirlikDrag = birlikDrag && birlikDrag.aktif ? birlikDrag : null;
+    const iptalMi = e?.type === "pointercancel";
     drag = null;
     tiklananBolgeId = null;
+    birlikDrag = null;
     svgKap.classList.remove("panning");
     istanbulEtiketFitPlanla(svg, 0);
     istanbulSuruklemePx = 0;
+    if (bitenBirlikDrag) {
+      const hedefId = bitenBirlikDrag.sonHedefId;
+      birlikDragTemizle(svg);
+      if (!iptalMi && hedefId && hedefId !== bitenBirlikDrag.kaynakId) {
+        aktifCallbacklar?.surukleBirakHareket?.(bitenBirlikDrag.kaynakId, hedefId);
+      }
+      return;
+    }
     if (secimId && typeof onBolgeSec === "function") onBolgeSec(secimId, { shiftKey: shift, kaynak: "pointer" });
   };
   svg.addEventListener("pointerup", dragBitir);
@@ -962,6 +1141,22 @@ function bolgeGeliriHesapla(bolge) {
   return Math.round((bolge?.gelir || 0) * (1 + (bolge?.yGel || 0) * 0.5));
 }
 
+// Bölgede bulunan konvoyların taşıt dökümü (lojistik harita modu için)
+function bolgeKonvoyTasitlari(bolgeId) {
+  let araba = 0;
+  let motor = 0;
+  (oyun.birimler || []).forEach((k) => {
+    if (k._sil || k.konumId !== bolgeId) return;
+    araba += k.tasitAraba || 0;
+    motor += k.tasitMotor || 0;
+  });
+  return {
+    araba,
+    motor,
+    kapasite: araba * (TASIT_TIPLERI.araba?.kapasite || 4) + motor * (TASIT_TIPLERI.motor?.kapasite || 2),
+  };
+}
+
 function bolgeEtiketIstihbaratMetni(bolge, seviye = "normal", mod = aktifHaritaModu) {
   if (!bolge || dusmanIstihbaratiGizliMi(bolge)) return "";
   const birlikToplam = bolgeBirlikToplami(bolge.id, bolge.owner, true);
@@ -974,6 +1169,11 @@ function bolgeEtiketIstihbaratMetni(bolge, seviye = "normal", mod = aktifHaritaM
   if (mod === "ekonomik") {
     return seviye === "dar" ? `+${gelir}` : `+${gelir}₺`;
   }
+  if (mod === "lojistik") {
+    const t = bolgeKonvoyTasitlari(bolge.id);
+    if (t.araba === 0 && t.motor === 0) return "";
+    return seviye === "dar" ? `${t.araba}/${t.motor}` : `🚗${t.araba} 🏍${t.motor}`;
+  }
   return "";
 }
 
@@ -981,6 +1181,7 @@ function bolgeTooltipMetni(bolge) {
   if (dusmanIstihbaratiGizliMi(bolge)) {
     if (aktifHaritaModu === "askeri") return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - Askeri istihbarat: ?`;
     if (aktifHaritaModu === "ekonomik") return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - Ekonomi istihbaratı: ?`;
+    if (aktifHaritaModu === "lojistik") return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - Lojistik istihbaratı: ?`;
     return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - İstihbarat: ?`;
   }
 
@@ -994,6 +1195,10 @@ function bolgeTooltipMetni(bolge) {
     const gelir = bolgeGeliriHesapla(bolge);
     return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - Gelir: ${gelir}₺ | Adam x${(1 + (bolge.yAdam || 0) * 0.7).toFixed(1)}`;
   }
+  if (aktifHaritaModu === "lojistik") {
+    const t = bolgeKonvoyTasitlari(bolge.id);
+    return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - 🚗 Araba: ${t.araba} | 🏍 Motor: ${t.motor} | Kapasite: ~${t.kapasite} birlik`;
+  }
   return `${bolge.ad} (${fraksiyonAdi(bolge.owner)}) - Garnizon: ${bolgeHazirBirimSayisi(bolge.id, bolge.owner)}`;
 }
 
@@ -1006,6 +1211,9 @@ function bolgeMetrikDegeri(bolge, mod) {
   }
   if (mod === "ekonomik") {
     return (bolge.gelir || 0) * (1 + (bolge.yGel || 0) * 0.5);
+  }
+  if (mod === "lojistik") {
+    return bolgeKonvoyTasitlari(bolge.id).kapasite;
   }
   return 0;
 }
@@ -1031,6 +1239,11 @@ function bolgeRenkHesapla(bolge, mod, min, max) {
     const light = 85 - n * 44;
     return `hsl(38 78% ${light}%)`;
   }
+  if (mod === "lojistik") {
+    if (v <= 0) return "hsl(215 14% 40%)";
+    const light = 82 - n * 42;
+    return `hsl(24 82% ${light}%)`;
+  }
   const light = 86 - n * 46;
   if (v <= 0) return "hsl(215 18% 38%)";
   return `hsl(196 76% ${light}%)`;
@@ -1039,6 +1252,7 @@ function bolgeRenkHesapla(bolge, mod, min, max) {
 function haritaModLegendMetni(mod) {
   if (mod === "askeri") return "Düşük birlik  •  Yüksek birlik";
   if (mod === "ekonomik") return "Düşük gelir  •  Yüksek gelir";
+  if (mod === "lojistik") return "Konvoy yok  •  Yoğun konvoy taşıtı";
   return "Sahiplik renkleri";
 }
 
@@ -1079,7 +1293,9 @@ function haritaModEfsaneGuncelle() {
       ? "linear-gradient(90deg, hsl(8 72% 84%), hsl(8 72% 36%))"
       : aktifHaritaModu === "ekonomik"
         ? "linear-gradient(90deg, hsl(38 78% 85%), hsl(38 78% 42%))"
-        : "linear-gradient(90deg, #1e8449, #922b21, #6c2bb8, #b7950b)";
+        : aktifHaritaModu === "lojistik"
+          ? "linear-gradient(90deg, hsl(215 14% 40%), hsl(24 82% 40%))"
+          : "linear-gradient(90deg, #1e8449, #922b21, #6c2bb8, #b7950b)";
   kutu.innerHTML = `
     <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
       <strong>Harita Modu: ${mod.ad}</strong>
@@ -1126,6 +1342,9 @@ function duraklatKisayolBagla() {
     if (e.code !== "Space" && e.key !== " ") return;
     const tag = (document.activeElement?.tagName || "").toLowerCase();
     if (tag === "input" || tag === "textarea" || tag === "select") return;
+    // Onay dialogu açıkken Space odaklı butona gitsin, pause'u tetiklemesin
+    const modalArka = document.getElementById("cm-arka");
+    if (modalArka && modalArka.style.display === "flex") return;
     e.preventDefault();
     if (typeof aktifCallbacklar?.duraklatDevam === "function") {
       aktifCallbacklar.duraklatDevam();
@@ -1433,14 +1652,7 @@ function arastirmaSayfaGuncel() {
 }
 
 function ekonomiDurumuUi() {
-  if (!oyun.ekonomi || typeof oyun.ekonomi !== "object") {
-    oyun.ekonomi = { haracSeviye: "orta", alimBuTur: 0, sonHaracGeliri: 0, personelTavanEk: 0 };
-  }
-  if (!EKONOMI_DENGE.haracSeviyeleri[oyun.ekonomi.haracSeviye]) oyun.ekonomi.haracSeviye = "orta";
-  if (!Number.isFinite(oyun.ekonomi.alimBuTur)) oyun.ekonomi.alimBuTur = 0;
-  if (!Number.isFinite(oyun.ekonomi.sonHaracGeliri)) oyun.ekonomi.sonHaracGeliri = 0;
-  if (!Number.isFinite(oyun.ekonomi.personelTavanEk)) oyun.ekonomi.personelTavanEk = 0;
-  return oyun.ekonomi;
+  return ekonomiDurumu();
 }
 
 function aktifHaracSeviyesiUi() {
@@ -1449,22 +1661,13 @@ function aktifHaracSeviyesiUi() {
 }
 
 function haracGeliriTahminBiz() {
+  // Gerçek tur hesabıyla aynı formül (araştırma bonusu dahil) — ekonomi.js
   const bizBolgeler = oyun.bolgeler.filter((b) => b.owner === "biz");
-  const harac = aktifHaracSeviyesiUi();
-  const taban = bizBolgeler.reduce((toplam, b) => {
-    const gelirTabani = (b.gelir || 0) * EKONOMI_DENGE.haracGelirOrani;
-    const nufusKatkisi = (b.nufus || 0) * EKONOMI_DENGE.haracNufusCarpani;
-    const yatirimCarpani = 1 + (b.yGel || 0) * EKONOMI_DENGE.haracYatirimBonus;
-    return toplam + (gelirTabani + nufusKatkisi) * yatirimCarpani;
-  }, 0);
-  return Math.max(0, Math.round(taban * (harac?.gelirCarpani || 1)));
+  return haracGeliriHesapla(bizBolgeler, aktifHaracSeviyesiUi());
 }
 
 function bizOrtalamaSadakatUi() {
-  const bizBolgeler = oyun.bolgeler.filter((b) => b.owner === "biz");
-  if (!bizBolgeler.length) return 55;
-  const toplam = bizBolgeler.reduce((t, b) => t + (Number(b.sadakat) || 55), 0);
-  return toplam / bizBolgeler.length;
+  return ownerOrtalamaSadakat("biz");
 }
 
 function bizToplamPersonelUi() {
@@ -1521,39 +1724,33 @@ function alimEkMaliyetiUi(adet = 1) {
 function hesaplaNetGelirDetay(owner) {
   const fr = oyun.fraksiyon[owner];
   if (!fr) return { net: "0", detay: "Veri yok." };
-  const bolgeler = oyun.bolgeler.filter((b) => b.owner === owner);
+  // Formülün tek kaynağı ekonomi.js — gerçek tur hesabıyla birebir aynı
+  // (eski kopya lider ve kriz çarpanlarını atlıyordu).
+  const t = ownerTurGeliri(owner);
   let temelGelir = 0;
   let yatirimBonusu = 0;
   let ozelBonusToplam = 0;
   let binaBonusToplam = 0;
   let arastirmaBonusToplam = 0;
   let geceBonusToplam = 0;
-  const gelir = bolgeler.reduce((t, b) => {
+  t.bolgeler.forEach((b) => {
     const temel = b.gelir || 0;
     const gelX = 1 + (b.yGel || 0) * 0.5;
-    const ozelBonus = b.ozellik && BOLGE_OZELLIKLERI[b.ozellik] ? (BOLGE_OZELLIKLERI[b.ozellik].gelirBonus || 0) : 0;
-    const binaBonusOran = (b.binalar || []).reduce((toplam, kayit) => {
-      const tanim = BINA_TIPLERI[kayit.tip];
-      return toplam + ((tanim?.etkiler?.gelirBonus || 0) * (kayit.seviye || 1));
-    }, 0);
-    const geceBonus = owner === "biz" && (b.ozellik === "kumarhane" || b.ozellik === "carsi")
-      ? arastirmaEfekt("geceEkonomiBonus")
-      : 0;
-    const arastirmaBonus = owner === "biz" ? arastirmaEfekt("gelirBonus") : 0;
-    const yatirimOran = gelX - 1;
+    const ozelBonus = ekoBolgeOzellikBonus(b, "gelirBonus");
+    const binaBonusOran = ekoBinaBonus(b, "gelirBonus");
+    const geceBonus = geceEkonomiBonusu(b);
     temelGelir += temel;
-    yatirimBonusu += temel * yatirimOran;
+    yatirimBonusu += temel * (gelX - 1);
     ozelBonusToplam += temel * ozelBonus * gelX;
     binaBonusToplam += temel * binaBonusOran * gelX;
-    arastirmaBonusToplam += temel * arastirmaBonus * gelX;
+    arastirmaBonusToplam += temel * t.baglam.arastirmaGelirBonus * gelX;
     geceBonusToplam += temel * geceBonus * gelX;
-    const bBonus = 1 + ozelBonus + binaBonusOran + geceBonus + arastirmaBonus;
-    return t + temel * gelX * bBonus;
-  }, 0);
+  });
   const gider = ownerBakimToplami(owner);
-  const pasifGelir = owner === "biz" ? arastirmaEfekt("pasifGelir") : 0;
-  const haracGeliri = owner === "biz" ? haracGeliriTahminBiz() : 0;
-  const net = Math.round(gelir + pasifGelir + haracGeliri - gider);
+  const net = Math.round(t.toplam - gider);
+  const carpanSatirlari = [];
+  if (t.baglam.liderCarpani !== 1) carpanSatirlari.push(`Lider çarpanı: ×${t.baglam.liderCarpani.toFixed(2)}`);
+  if (t.baglam.kriz !== 1) carpanSatirlari.push(`Kriz çarpanı: ×${t.baglam.kriz.toFixed(2)}`);
   const detay = [
     `Temel gelir: ${Math.round(temelGelir)}₺`,
     `Yatırım bonusu: +${Math.round(yatirimBonusu)}₺`,
@@ -1561,8 +1758,9 @@ function hesaplaNetGelirDetay(owner) {
     `Bina bonusları: +${Math.round(binaBonusToplam)}₺`,
     `Araştırma bonusu: +${Math.round(arastirmaBonusToplam)}₺`,
     `Gece ekonomisi: +${Math.round(geceBonusToplam)}₺`,
-    `Pasif gelir: +${Math.round(pasifGelir)}₺`,
-    `Haraç geliri: +${Math.round(haracGeliri)}₺`,
+    ...carpanSatirlari,
+    `Pasif gelir: +${Math.round(t.pasifGelir)}₺`,
+    `Haraç geliri: +${Math.round(t.haracGelir)}₺`,
     `Bakım gideri: -${Math.round(gider)}₺`,
     `Net: ${net >= 0 ? "+" : ""}${Math.round(net)}₺`,
   ].join("\n");
@@ -2146,7 +2344,7 @@ export function durumCiz() {
     ? ` <span style="color:#f7b267">(-${bizLojistikKullanim})</span>`
     : "";
   sol.innerHTML = `
-    <span class="etiket">Çetemiz:</span> <span id="biz-adi">${biz.ad}</span>
+    <span class="etiket">Çetemiz:</span> <span id="biz-adi">${htmlKacir(biz.ad)}</span>
     &nbsp; | &nbsp; <span class="etiket">Lider:</span> ${lider ? liderProfilAdSatiriHTML(lider, 20) : '—'}
     &nbsp; | &nbsp; <span class="etiket">Para:</span> ${Math.floor(biz.para)} ₺
     &nbsp; | &nbsp; <span class="etiket">Birlik:</span> ${bizBirlikToplam}
@@ -2174,8 +2372,8 @@ export function durumCiz() {
   &nbsp; | &nbsp; <span class="etiket">Şöhret:</span> ${Math.round(
       oyun.sohret.biz
     )}/100
-  &nbsp; | &nbsp; <span class="etiket" title="Suçluluk arttıkça polis baskın riski yükselir.">Suç:</span> ${Math.round(asayis.sucluluk || 0)}
-  &nbsp; | &nbsp; <span class="etiket" title="Polis baskısı yüksekse ceza ve taşıt el koyma riski artar.">Polis:</span> %${Math.round(asayis.polisBaski || 0)}
+  &nbsp; | &nbsp; <span class="etiket" title="Suçluluk arttıkça polis baskın riski yükselir. 12+ riskli, 60+ tehlikeli.">Suç:</span> <span style="color:${(asayis.sucluluk || 0) >= 60 ? "#e74c3c" : (asayis.sucluluk || 0) >= 12 ? "#f39c12" : "inherit"}">${Math.round(asayis.sucluluk || 0)}</span>
+  &nbsp; | &nbsp; <span class="etiket" title="Polis baskısı yüksekse ceza ve taşıt el koyma riski artar.">Polis:</span> <span style="color:${(asayis.polisBaski || 0) >= 60 ? "#e74c3c" : (asayis.polisBaski || 0) >= 30 ? "#f39c12" : "inherit"}">%${Math.round(asayis.polisBaski || 0)}</span>
   &nbsp; | &nbsp; <span class="etiket" title="Seviye: ${harac.ad} | Gelir x${harac.gelirCarpani.toFixed(2)} | Sadakat ${harac.sadakatDelta >= 0 ? "+" : ""}${harac.sadakatDelta.toFixed(2)}/tur | Suç ${harac.suclulukDelta >= 0 ? "+" : ""}${harac.suclulukDelta.toFixed(2)}/tur">Haraç:</span> ${harac.ad} (+${Math.round(eco.sonHaracGeliri || haracGelir)}₺)
   &nbsp; | &nbsp; <span class="etiket" title="${netGelir.detay.replace(/"/g, "&quot;")}">Net:</span> <span title="${netGelir.detay.replace(/"/g, "&quot;")}">${netGelir.net}</span>
   &nbsp; | &nbsp; <span class="etiket">Diplo:</span> ${ilAi1.ikon}${Math.round(ilAi1.deger)} / ${ilAi2.ikon}${Math.round(ilAi2.deger)} / ${ilAi3.ikon}${Math.round(ilAi3.deger)}
@@ -2262,6 +2460,23 @@ function istanbulSvgOlustur(onBolgeSec) {
   merge.appendChild(mn1); merge.appendChild(mn2);
   filter.appendChild(merge);
   defs.appendChild(filter);
+
+  // Konvoy oku uç işaretleri (owner rengine göre)
+  Object.entries(KONVOY_RENKLERI).forEach(([owner, renk]) => {
+    const marker = document.createElementNS(NS, "marker");
+    marker.id = `konvoy-ok-uc-${owner}`;
+    marker.setAttribute("viewBox", "0 0 10 10");
+    marker.setAttribute("refX", "8");
+    marker.setAttribute("refY", "5");
+    marker.setAttribute("markerWidth", "4.5");
+    marker.setAttribute("markerHeight", "4.5");
+    marker.setAttribute("orient", "auto-start-reverse");
+    const ucgen = document.createElementNS(NS, "polygon");
+    ucgen.setAttribute("points", "0,0 10,5 0,10");
+    ucgen.setAttribute("fill", renk);
+    marker.appendChild(ucgen);
+    defs.appendChild(marker);
+  });
   svg.appendChild(defs);
   
   // === İLÇE POLYGONLARI ===
@@ -2308,7 +2523,13 @@ function istanbulSvgOlustur(onBolgeSec) {
     kopruGrup.appendChild(cizgi);
   });
   svg.appendChild(kopruGrup);
-  
+
+  // === KONVOY OKLARI KATMANI (etiketlerin altında) ===
+  const konvoyOkGrup = document.createElementNS(NS, "g");
+  konvoyOkGrup.id = "konvoy-ok-grup";
+  konvoyOkGrup.setAttribute("pointer-events", "none");
+  svg.appendChild(konvoyOkGrup);
+
   // === İLÇE ETİKETLERİ ===
   const labelGrup = document.createElementNS(NS, "g");
   labelGrup.id = "label-grup";
@@ -2353,6 +2574,66 @@ function istanbulSvgOlustur(onBolgeSec) {
   istanbulZoomKontrolOlustur(svgKap, svg);
   istanbulEtkilesimBagla(svgKap, svg, onBolgeSec);
   istanbulSvgGuncel();
+}
+
+function bolgeMerkezi(bolgeId) {
+  const ilce = ISTANBUL_ILCELER[bolgeId];
+  if (!ilce) return null;
+  return ilceEtiketKonumu(ilce);
+}
+
+// Haritadaki tüm aktif konvoyları ok olarak çizer:
+// aktif bacak kavisli animasyonlu ok, kalan rota soluk kesikli çizgi.
+function istanbulKonvoyOklariGuncel() {
+  const grup = document.getElementById("konvoy-ok-grup");
+  if (!grup) return;
+  const NS = "http://www.w3.org/2000/svg";
+  grup.innerHTML = "";
+
+  (oyun.birimler || []).forEach((k) => {
+    if (k._sil || (k.adet || 0) <= 0) return;
+    if (!k.hedefId || k.hedefId === k.konumId) return;
+    const bas = bolgeMerkezi(k.konumId);
+    const son = bolgeMerkezi(k.hedefId);
+    if (!bas || !son) return;
+    const ownerAnahtar = KONVOY_RENKLERI[k.owner] ? k.owner : "tarafsiz";
+    const renk = KONVOY_RENKLERI[ownerAnahtar];
+
+    // Kalan rota (aktif bacaktan sonrası) soluk kesikli çizgi
+    const rotaNoktalar = [son, ...(k.rota || []).map((id) => bolgeMerkezi(id)).filter(Boolean)];
+    if (rotaNoktalar.length > 1) {
+      const poly = document.createElementNS(NS, "polyline");
+      poly.setAttribute("points", rotaNoktalar.map((p) => `${p.cx.toFixed(1)},${p.cy.toFixed(1)}`).join(" "));
+      poly.setAttribute("class", "konvoy-rota");
+      poly.setAttribute("stroke", renk);
+      grup.appendChild(poly);
+    }
+
+    // Aktif bacak: hafif kavisli ok
+    const mx = (bas.cx + son.cx) / 2;
+    const my = (bas.cy + son.cy) / 2;
+    const dx = son.cx - bas.cx;
+    const dy = son.cy - bas.cy;
+    const uz = Math.hypot(dx, dy) || 1;
+    const kavis = Math.min(14, uz * 0.16);
+    const kx = mx - (dy / uz) * kavis;
+    const ky = my + (dx / uz) * kavis;
+    const yol = document.createElementNS(NS, "path");
+    yol.setAttribute("d", `M ${bas.cx.toFixed(1)} ${bas.cy.toFixed(1)} Q ${kx.toFixed(1)} ${ky.toFixed(1)} ${son.cx.toFixed(1)} ${son.cy.toFixed(1)}`);
+    yol.setAttribute("class", `konvoy-ok${k.bekliyor ? " bekliyor" : ""}`);
+    yol.setAttribute("stroke", renk);
+    yol.setAttribute("marker-end", `url(#konvoy-ok-uc-${ownerAnahtar})`);
+    grup.appendChild(yol);
+
+    // Adet rozeti (kavisin üstünde)
+    const etiket = document.createElementNS(NS, "text");
+    etiket.setAttribute("x", (mx + (kx - mx) * 0.75).toFixed(1));
+    etiket.setAttribute("y", (my + (ky - my) * 0.75).toFixed(1));
+    etiket.setAttribute("class", "konvoy-ok-etiket");
+    etiket.setAttribute("fill", renk);
+    etiket.textContent = `${k.bekliyor ? "⏸" : ""}${k.adet}`;
+    grup.appendChild(etiket);
+  });
 }
 
 function istanbulSvgGuncel() {
@@ -2411,6 +2692,7 @@ function istanbulSvgGuncel() {
       }
     }
   });
+  istanbulKonvoyOklariGuncel();
   haritaModEfsaneGuncelle();
   istanbulEtiketTipografiGuncelle();
 }
@@ -2655,7 +2937,7 @@ export function ustPanelOyunButonlariniBagla(cb) {
       arka.style.display = "flex";
       document.querySelectorAll("#hiz-grup .hiz-btn").forEach((btn) => {
         btn.onclick = () => {
-          const seviye = parseInt(btn.getAttribute("data-seviye"));
+          const seviye = parseInt(btn.getAttribute("data-seviye"), 10);
           const katsayi = [0, 0.5, 0.75, 1, 1.5, 2][seviye]; // 1→0.5, 5→2
           cb.hizAyarla(katsayi);
         };
@@ -3006,21 +3288,65 @@ export function islemlerCiz(cb) {
     };
   });
 
+  // Esirleri sahibinin bir bölgesine geri katar; bölgesi kalmadıysa dağılırlar.
+  const esirleriEveGonder = (owner, adet) => {
+    const bolge = oyun.bolgeler.find((b2) => b2.owner === owner);
+    if (bolge && adet > 0) yiginaEkle(bolge.id, owner, adet);
+    return !!bolge;
+  };
+
   // Fidye butonları
   document.querySelectorAll(".btn-fidye").forEach((btn) => {
     btn.onclick = () => {
-      const idx = parseInt(btn.getAttribute("data-idx"));
+      const idx = parseInt(btn.getAttribute("data-idx"), 10);
       const esir = oyun.esirler[idx];
       if (!esir) return;
       const maliyet = esir.adet * 15;
       if (oyun.fraksiyon.biz.para < maliyet) return;
       oyun.fraksiyon.biz.para -= maliyet;
-      const dost = oyun.bolgeler.find((b2) => b2.owner === "biz");
-      if (dost) {
-        import("./state.js").then((m) => m.yiginaEkle(dost.id, "biz", esir.adet));
-      }
+      // Fidye tutan tarafın kasasına gider
+      const tutanFr = oyun.fraksiyon[esir.tutulan];
+      if (tutanFr) tutanFr.para = (tutanFr.para || 0) + maliyet;
+      esirleriEveGonder("biz", esir.adet);
       logYaz(`💰 ${esir.adet} esir fidye ile kurtarıldı!`);
       oyun.esirler.splice(idx, 1);
+      islemlerCiz(cb);
+    };
+  });
+
+  // Esir serbest bırakma (elimizdeki esirler)
+  document.querySelectorAll(".btn-esir-birak").forEach((btn) => {
+    btn.onclick = () => {
+      const idx = parseInt(btn.getAttribute("data-idx"), 10);
+      const esir = oyun.esirler[idx];
+      if (!esir || esir.tutulan !== "biz") return;
+      const sahibi = oyun.fraksiyon[esir.owner]?.ad || esir.owner;
+      const eveDondu = esirleriEveGonder(esir.owner, esir.adet);
+      iliskiDegistir("biz", esir.owner, +6, "Esirler serbest bırakıldı");
+      logYaz(
+        `🕊️ ${esir.adet} ${sahibi} esiri serbest bırakıldı${eveDondu ? "" : " (dönecek bölge kalmamıştı, dağıldılar)"}. İlişki düzeldi.`
+      );
+      oyun.esirler.splice(idx, 1);
+      islemlerCiz(cb);
+    };
+  });
+
+  // Esir takası (karşılıklı esir varsa 1'e 1)
+  document.querySelectorAll(".btn-esir-takas").forEach((btn) => {
+    btn.onclick = () => {
+      const owner = btn.getAttribute("data-owner");
+      const bizdeki = oyun.esirler.find((e) => e.owner === owner && e.tutulan === "biz" && e.adet > 0);
+      const ondaki = oyun.esirler.find((e) => e.owner === "biz" && e.tutulan === owner && e.adet > 0);
+      if (!bizdeki || !ondaki) return;
+      const takas = Math.min(bizdeki.adet, ondaki.adet);
+      bizdeki.adet -= takas;
+      ondaki.adet -= takas;
+      esirleriEveGonder("biz", takas);
+      esirleriEveGonder(owner, takas);
+      oyun.esirler = oyun.esirler.filter((e) => e.adet > 0);
+      iliskiDegistir("biz", owner, +4, "Esir takası yapıldı");
+      const sahibi = oyun.fraksiyon[owner]?.ad || owner;
+      logYaz(`🔁 ${sahibi} ile ${takas} esir 1'e 1 takas edildi, adamlarımız geri döndü.`);
       islemlerCiz(cb);
     };
   });
@@ -3275,7 +3601,17 @@ function esirPanelHTML() {
     html += `<div style="font-size:12px;color:#2ecc71">`;
     bizTutuyor.forEach((e) => {
       const sahibi = oyun.fraksiyon[e.owner]?.ad || e.owner;
-      html += `<div>${e.adet} ${sahibi} esiri elimizde.</div>`;
+      const globalIdx = oyun.esirler.indexOf(e);
+      // Karşı taraf da bizden esir tutuyorsa 1'e 1 takas mümkün
+      const takasMumkun = oyun.esirler.some(
+        (x) => x.owner === "biz" && x.tutulan === e.owner && x.adet > 0
+      );
+      html += `<div>${e.adet} ${sahibi} esiri elimizde.
+        ${takasMumkun
+          ? `<button class="buton grimsi btn-esir-takas" data-owner="${e.owner}" style="font-size:11px;padding:2px 6px" title="Karşılıklı esirler 1'e 1 değiştirilir, adamlarımız geri döner.">Takas</button>`
+          : ""}
+        <button class="buton grimsi btn-esir-birak" data-idx="${globalIdx}" style="font-size:11px;padding:2px 6px" title="Esirleri karşılıksız bırak; ${sahibi} ile ilişki düzelir.">Serbest Bırak</button>
+      </div>`;
     });
     html += `</div>`;
   }
