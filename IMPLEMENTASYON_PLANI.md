@@ -2,6 +2,13 @@
 
 _Tarih: 2026-04-07_
 
+> **KAPANIŞ (2026-08-28):** Bu plandaki maddelerin tamamı uygulandı ve kodla
+> doğrulandı — BUG-01…06, EK-01…06 (EK-02 esir takası/serbest bırakma ve EK-05
+> asayiş HUD dahil), YEN-01…04 (4. Lojistik harita modu dahil) ve ARCH-01…03.
+> Tek not: ARCH-01 garnizon geçişinin `spy.js`'te kalan üç ölü yazımı da
+> 2026-08-28'de temizlendi. Doküman arşiv niteliğindedir; güncel durum
+> `PROJE_PLANI.md`'dedir.
+
 ---
 
 ## BÖLÜM 1: Aktif Hatalar

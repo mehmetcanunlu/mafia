@@ -1,127 +1,49 @@
-# Durum ve Aksiyon Raporu
+# Durum ve Aksiyon Raporu — KAPANIŞ
 
-Tarih: 2026-04-06  
-Kapsam: `PROJE_PLANI.md` ve `src/*.js` karsilastirmasi  
-Not: Bu calismada kod degisikligi yapilmadi; sadece durum tespiti ve iyilestirme onerileri uretildi.
+İlk rapor tarihi: 2026-04-06  
+Kapanış/senkron tarihi: 2026-08-28  
+Durum: **Bu rapordaki tüm bulgular çözüldü veya geçersiz çıktı.** Dosya arşiv
+niteliğindedir; güncel durum için `PROJE_PLANI.md`'ye bakın.
 
-## Durum Ozeti
+## Bulguların Kapanış Durumu
 
-### Faz siniflandirmasi (plan vs kod)
+### Plan-Kod Tutarsızlıkları
 
-| Faz | Plan Durumu | Kod Gercegi | Sinif | Kanit |
-|---|---|---|---|---|
-| Faz 1-5 | Tamamlandi olarak yazili | Ana mekanikler kodda var | yapildi | `src/main.js`, `src/actions.js`, `src/ui.js`, `src/research.js`, `src/spy.js` |
-| Faz 6 | Tum maddeler bos (`[ ]`) | Diplomasi sokumu + bina + olay + entegrasyonlarin buyuk kismi kodda var | tutarsiz | `/Users/umutvardernegi/mafia/PROJE_PLANI.md:192-221` vs `src/actions.js`, `src/events.js`, `src/main.js`, `src/state.js`, `src/save.js` |
-| Faz 7 | Tamamlandi (`[x]`) | AI birim/arama/casusluk/bina/hedef secimi kodda var | yapildi | `src/ai.js` |
-| Faz 8 | Tamamlandi (`[x]`) | UI ikonlar, arastirma paneli, ses baglantilari kodda var | yapildi | `src/ui.js`, `src/audio.js`, `src/spy.js`, `src/research.js` |
-| Faz 9 | Tamamlandi (`[x]`) | Tip bazli bakim, save normalize, baslangic tip garantisi kodda var | yapildi | `src/units.js`, `src/save.js`, `src/state.js`, `src/main.js` |
+| Bulgu | Özet | Kapanış |
+|---|---|---|
+| T1 | Dosya haritası eksik/yanlış (`diplomacy.js` vb.) | ✅ 2026-08-28: `PROJE_PLANI.md` dosya haritası gerçek `src/` içeriğiyle yeniden yazıldı (`diplomasi.js`, `gucDengesi.js`, `liderHavuzu.js`, `logistics.js`, `istanbul-geometry.js`, `scripts/tutorial` dahil) |
+| T2 | Faz 6 maddeleri planda açık görünüyordu | ✅ Faz 6 kodda tamamlanmıştı; son açık madde (esir takas/serbest bırakma) 2026-08-28'de kodlandı ve planda işaretlendi |
+| T3 | Planda kayıt sürümü eski (2/4), kodda farklı | ✅ Kodda `VERIYON = 8`; plan güncellendi, sürüm guard'ları sertleştirildi (`save.js`) |
 
-### Faz 6 madde siniflandirmasi (yapildi/kismi/acik/tutarsiz)
+Not: Raporun "diplomacy.js yok, import/çağrı yok" tespiti sonradan geçersizleşti —
+diplomasi geri getirilip `src/diplomasi.js` olarak oyunun en büyük modülü oldu.
 
-- yapildi:
-  - Diplomasi bagimliliklari sokulmus (`diplomacy.js` yok, import/cagri yok)
-  - Bina kurma/yukseltme/UI var
-  - Olay sistemi agirlikli havuzla calisiyor
-  - Gecekondu genc uretimi var
-  - Kumarhane riskli olay etkisi var
-  - Depo savunma bonusu combat hesabinda
-  - Arastirma efektleri ekonomi/casusluk/satin alma tarafina bagli
-  - Yarali iyilesme ticki var
-- kismi:
-  - Esir serbest birakma/takas maddesi: fidye var, takas/serbest birakma akislari yok
-- acik:
-  - Faz 6 maddeleri plan dosyasinda hala `[ ]` oldugu icin resmi durum guncellenmemis
-- tutarsiz:
-  - Plan metni diplomasiyi hala mevcut dosya haritasinda gosteriyor, kodda yok
+### Hata/Risk Bulguları
 
-## Plan-Kod Tutarsizliklari
+| Bulgu | Özet | Kapanış |
+|---|---|---|
+| R1 | Harita kartları/SVG düşman istihbaratını açık veriyordu | ✅ Koddaki `bolgeEtiketIstihbaratMetni()` + `istihbaratGizli` maskeleme ile çözülmüş (`ui.js`) |
+| R2 | `garnizonTemizleVeYiginaTasi()` ai3'ü atlıyordu | ✅ Fonksiyon kaldırıldı; garnizon geçişi `legacyGarnizonlariBirimlereAktar/Tasi` ile tüm owner'lar için yapılıyor |
+| R3 | `tileSavasVeSonuc` / `tileIcCatismaVeTemizlik` ölü kod | ✅ Kodda artık yok |
+| R4 | `_kesifAi` yazılıyor ama okunmuyordu | ✅ Artık okunuyor: `ai.js` süre kontrolü + `diplomasi.js` tüketimi |
+| R5 | `arastrmaBonus` yazım hatası | ✅ Kodda tek yazım `arastirmaBonus` |
 
-### Bulgu T1
-- Bulgu: `PROJE_PLANI.md` dosya haritasi hala `diplomacy.js` varmis gibi yaziyor.
-- Etki: Yeni gelistirici yanlis dosyaya baglanir, onboarding ve bakim hizi duser.
-- Kanit (dosya:satir): `/Users/umutvardernegi/mafia/PROJE_PLANI.md:28`, `src/` klasorunde `diplomacy.js` yok.
-- Onerilen duzeltme: Dosya haritasini mevcut `src` icerigi ile birebir guncelle; kaldirilan modulleri listeden sil.
-- Oncelik: P0
+## 2026-08-28 Oturumunda Ek Olarak Kapananlar
 
-### Bulgu T2
-- Bulgu: Faz 6 maddeleri planda tamamen acik gorunuyor (`[ ]`) ama kodda buyuk oranda uygulanmis.
-- Etki: Is takip raporu gercegi yansitmiyor; hangi isin kaldigi net gorunmuyor.
-- Kanit (dosya:satir): `/Users/umutvardernegi/mafia/PROJE_PLANI.md:192-221` vs `src/actions.js`, `src/events.js`, `src/main.js`, `src/state.js`, `src/save.js`.
-- Onerilen duzeltme: Faz 6 maddelerini `yapildi/kismi/acik` olarak yeniden isaretle; sadece gercek acik kalemleri birakir.
-- Oncelik: P0
+Bu rapor kapsamı dışında, aynı senkron oturumunda tespit edilip düzeltilenler:
 
-### Bulgu T3
-- Bulgu: Plan dokumaninda save versiyonu `2`, kodda save versiyonu `4`.
-- Etki: Save uyumlulugu hakkinda yanlis beklenti olusur.
-- Kanit (dosya:satir): `/Users/umutvardernegi/mafia/PROJE_PLANI.md:72`, `/Users/umutvardernegi/mafia/src/save.js:6`.
-- Onerilen duzeltme: Dokumana save versiyonu ve normalize edilen alanlarin guncel listesini ekle.
-- Oncelik: P0
+- **XSS**: çete adları kaynakta `adTemizle()` ile temizleniyor, render noktaları
+  `htmlKacir()` kullanıyor (`utils.js`, `ui.js`, `main.js`, `modal.js`, `save.js`)
+- **Otokayıt sırası**: `otomatikKaydet()` artık savaş/hareket çözümünden sonra
+- **Zafer sonrası fazladan tur**: `turIsle()` kazanan bulununca `return` ediyor
+- **İstatistik geri yükleme**: kayıttan dönen istatistik artık silinmiyor;
+  yeni oyun eski grafiği devralmıyor
+- **`spy.js` ölü garnizon yazımları** temizlendi
+- **Yeni özellikler**: esir takası/serbest bırakma, lojistik harita modu (tuş 4),
+  SVG konvoy okları, sürükle-bırak birlik hareketi
 
-## Hata ve Risk Bulgulari (P0-P3)
+## Güncel Açık Borçlar
 
-### Casusluk anlami
-
-#### Bulgu R1
-- Bulgu: Duz detay panelinde istihbarat kilidi olsa da harita kartlari ve Istanbul SVG etiketleri dusman garnizon/birim bilgisini acik veriyor.
-- Etki: Kesif mekanigi deger kaybediyor; oyuncu casusluk yapmadan kritik bilgiyi aliyor.
-- Kanit (dosya:satir): `/Users/umutvardernegi/mafia/src/ui.js:313`, `/Users/umutvardernegi/mafia/src/ui.js:378`, `/Users/umutvardernegi/mafia/src/ui.js:409`, `/Users/umutvardernegi/mafia/src/ui.js:423`, `/Users/umutvardernegi/mafia/src/ui.js:498`, `/Users/umutvardernegi/mafia/src/ui.js:499`.
-- Onerilen duzeltme: Harita/SVG tarafinda da kesif kilidi uygula; kesif yoksa `?` veya tahmini bant goster.
-- Oncelik: P1
-
-### Bulgu R2
-- Bulgu: `garnizonTemizleVeYiginaTasi()` sadece `biz/ai1/ai2` icin garnizonu yiginlara tasiyor; sonra tum ownerlarda `garnizon` siliyor.
-- Etki: AI3 baslangic gucu yeni oyunda tutarsiz olabilir.
-- Kanit (dosya:satir): `/Users/umutvardernegi/mafia/src/main.js:42-47`.
-- Onerilen duzeltme: Owner kosuluna `ai3` ekle veya owner listesini dinamiklestir.
-- Oncelik: P1
-
-### Bulgu R3
-- Bulgu: `tileSavasVeSonuc` ve `tileIcCatismaVeTemizlik` fonksiyonlari tanimli ama cagrilmiyor.
-- Etki: Kod karmasasi artar; davranis degisikligi sanilan ama aktif olmayan kod bakim maliyeti dogurur.
-- Kanit (dosya:satir): `/Users/umutvardernegi/mafia/src/main.js:60`, `/Users/umutvardernegi/mafia/src/main.js:97`.
-- Onerilen duzeltme: Kullanilmiyorsa kaldir; kullanilacaksa `hareketTick()` akisina net entegrasyon yap.
-- Oncelik: P2
-
-### Bulgu R4
-- Bulgu: AI kesif state'i `_kesifAi` olarak yaziliyor ancak hicbir yerde okunmuyor.
-- Etki: AI kesif operasyonu davranisa etkisiz kalir; bos maliyet ureten bir akis olur.
-- Kanit (dosya:satir): `/Users/umutvardernegi/mafia/src/ai.js:373` (okuma referansi yok).
-- Onerilen duzeltme: `_kesifAi` bilgisini AI hedef secimi/saldiri skoru ve UI ihbar akisina bagla.
-- Oncelik: P2
-
-### Bulgu R5
-- Bulgu: `universite` ozelliginde `arastrmaBonus` yazim hatasi var; isimlendirme tutarsiz.
-- Etki: Gelecekte bu alan okunmak istendiginde sessiz bug uretme riski.
-- Kanit (dosya:satir): `/Users/umutvardernegi/mafia/src/config.js:77`, `/Users/umutvardernegi/mafia/src/config.js:89`.
-- Onerilen duzeltme: `arastirmaBonus` adina gecis, geriye donuk normalize notu ve yorum temizligi.
-- Oncelik: P3
-
-## Oncelikli Iyilestirme Backlogu
-
-### P0 (dokumantasyon dogrulugu)
-- `PROJE_PLANI.md` faz durumlarini kodla hizala (`Faz 6` maddeleri guncelle).
-- Dosya haritasini gercek `src` yapisina gore duzelt (`diplomacy.js` referansini kaldir).
-- Save bolumunu versiyon 4 ve normalize edilen alanlarla guncelle.
-
-### P1 (oynanis dogrulugu)
-- Kesif yokken harita karti + Istanbul SVG dusman istihbaratini maskele.
-- `garnizonTemizleVeYiginaTasi()` icin `ai3` tasima tutarsizligini gider.
-
-### P2 (kod sagligi)
-- Kullanilmayan savas fonksiyonlarini kaldir veya aktif akisa entegre et.
-- AI kesif state'ini karar mekanigina bagla (hedef skoru, risk analizi, zamanli etkiler).
-
-### P3 (temizlik)
-- `arastrmaBonus` typo duzelt ve yorumlari standartlastir.
-- Benzer isimlendirme borclari icin kucuk bir config naming denetimi ekle.
-
-## 7 gunluk uygulama sirasi (P0 -> P1 -> P2)
-
-1. Gun 1: `PROJE_PLANI.md` dosya haritasi ve save versiyonu guncellemesi (P0).
-2. Gun 2: Faz 6 maddelerini `yapildi/kismi/acik` olarak net isaretleme (P0).
-3. Gun 3: Harita kartinda kesif yoksa dusman garnizon/birim bilgisini gizleme (P1).
-4. Gun 4: Istanbul SVG tooltip/info etiketlerinde ayni istihbarat gizleme kurali (P1).
-5. Gun 5: `garnizonTemizleVeYiginaTasi()` owner kosulunu `ai3` dahil duzeltme (P1).
-6. Gun 6: Kullanilmayan savas fonksiyonlari icin karar: kaldirma veya entegrasyon (P2).
-7. Gun 7: AI `_kesifAi` state entegrasyonu + `arastrmaBonus` typo temizligi (P2+P3).
-
+Bu rapordaki her şey kapandığı için yeni açık işler `PROJE_PLANI.md` →
+"Bilinen açık borçlar" bölümünde takip ediliyor (gelir formülü tekilleştirme,
+sim-test determinizmi, ölü kod temizliği, erişilebilirlik, kayıt migrasyon altyapısı).

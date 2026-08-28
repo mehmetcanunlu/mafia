@@ -1,11 +1,15 @@
 # Mafia — Türk Mafya Strateji Oyunu: Proje Planı & Durum
 
+> **Son kod senkronu:** 2026-08-28 — Bu doküman `src/` içeriğiyle satır satır karşılaştırılarak
+> güncellendi. Eski sürümdeki "diplomasi çekirdekten çıkarıldı" iddiası, v4 kayıt sürümü,
+> `motorlu` birim tipi ve 3 dallı araştırma tarifi gerçeği yansıtmıyordu; düzeltildi.
+
 ## Genel Bakış
 
 **Tür:** Tur tabanlı strateji, Türk mafya temalı  
 **Mimari:** Vanilla JavaScript ES modülleri (bundler yok)  
 **Giriş noktası:** `public/index.html` → `src/main.js`  
-**Harita:** Grid (4×4 / 5×5) veya İstanbul SVG haritası  
+**Harita:** İstanbul SVG haritası (varsayılan ve tek aktif mod; eski 4×4/5×5 grid renderer kodda duruyor ama başlangıç akışı `istanbul-buyuk`'a sabit)  
 **Dil:** Türkçe (kod değişken isimleri dahil)
 
 ---
@@ -16,141 +20,121 @@
 mafia/
 ├── public/
 │   └── index.html          — Tek HTML sayfası; tüm CSS burada
+├── data/
+│   └── istanbul-ilceler.geojson — İlçe geometrisi ham verisi
+├── scripts/
+│   ├── tutorial/           — Oyun içi tutorial (DİKKAT: src/main.js buradan import eder,
+│   │                         yani runtime bağımlılığıdır, build aracı değildir)
+│   ├── sim-test.mjs        — Headless ekonomi simülasyonu (assert'süz; gerçek test değil)
+│   ├── build-leader-pool.mjs      — Lider havuzu üretim scripti
+│   └── build-istanbul-geometry.mjs — GeoJSON → SVG path dönüştürücü
 └── src/
-    ├── main.js             — Oyun döngüsü, turIsle(), harita click, modal bootstrap
-    ├── state.js            — `oyun` global nesnesi, bolgeById(), yiginaEkle() vb.
-    ├── config.js           — ZORLUK, AYAR, MEKANIK, BOLGE_OZELLIKLERI, LIDERLER, sabitler
-    ├── ui.js               — durumCiz, haritaCiz, haritaGuncel, detayCiz, islemlerCiz, bitisBanner
-    ├── actions.js          — Tüm oyuncu aksiyonları (async, Promise-modal kullanır)
-    ├── ai.js               — aiGelisimVeUretim(), aiSaldiriHareket()
-    ├── combat.js           — savasKazanmaIhtimali(), neutralSavunma(), saldiriMaliyeti()
-    ├── map.js              — kisaRota(), enYakinGuvenli(), komsuMu()
-    ├── events.js           — olayTick(), krizCarpani() — rastgele olay sistemi
-    ├── missions.js         — gorevKontrol(), gorevOlustur() — görev sistemi
-    ├── modal.js            — showAlert/showConfirm/showPrompt (Promise tabanlı), showToast()
-    ├── save.js             — oyunKaydet/Yukle/tumKayitlar/kayitSil/otomatikKaydet (localStorage)
-    ├── audio.js            — sesCal(), muzikBaslat/Durdur() — Web Audio API sentezleme
+    ├── main.js             — Oyun döngüsü, turIsle(), hareketTick(), savaş çözümü, modal bootstrap
+    ├── state.js            — `oyun` global nesnesi, bolgeById(), yiginaEkle(), yeniOyun()
+    ├── config.js           — ZORLUK, AYAR, MEKANIK, BOLGE_OZELLIKLERI, BINA_TIPLERI, EKONOMI_DENGE
+    ├── ui.js               — durumCiz, haritaCiz, istanbulSvg*, harita modları, konvoy okları,
+    │                         sürükle-bırak birlik hareketi, detayCiz, islemlerCiz, bitisBanner
+    ├── actions.js          — Tüm oyuncu aksiyonları (async, Promise-modal), callbacklar nesnesi
+    ├── ai.js               — aiGelisimVeUretim(), aiSaldiriHareket(), aiCasuslukYap(), aiArastirmaTick()
+    ├── diplomasi.js        — EN BÜYÜK MODÜL (~3000 satır): savaş/barış, ittifak, ticaret, tehdit,
+    │                         sabotaj, rüşvet, koalisyon, itibar, ilişki tarihçesi, diplomasiTick()
+    ├── combat.js           — savasKazanmaIhtimali(), saldiriMaliyeti()
+    ├── map.js              — kisaRota(), komsuMu()
+    ├── logistics.js        — Fraksiyon bazlı taşıt havuzu (🚗/🏍️), kapasite/ayırma/iade
+    ├── units.js            — BIRIM_TIPLERI, TASIT_TIPLERI, egitimTick(), terfi zinciri
+    ├── events.js           — olayTick(), krizCarpani() — ağırlıklı olay havuzu
+    ├── missions.js         — gorevKontrol(), gorevOlustur()
+    ├── modal.js            — showAlert/showConfirm/showPrompt/showRangePrompt (Promise), showToast()
+    ├── save.js             — 3 slotlu localStorage kayıt (VERIYON=8), oyunDurumuNormallestir()
+    ├── audio.js            — Web Audio API sentezleme
     ├── stats.js            — istatistikKaydet(), istatistikGrafik(), istatistikSifirla()
     ├── animations.js       — savasAnimasyonu(), elDegistirmeFlash(), konvoyBaslaAnimasyonu()
-    ├── istanbul.js         — ISTANBUL_ILCELER, BOGAZ_PATH, KOPRULER (SVG harita verisi)
-    ├── units.js            — BIRIM_TIPLERI, egitimTick(), motorluHizTick(), grupEfektifSavunma()
-    ├── spy.js              — kesifYap(), suikastYap(), liderDevreDisiMi(), kesifAktifMi()
+    ├── istanbul.js         — ISTANBUL_ILCELER, KOPRULER, başlangıç ataması
+    ├── istanbul-geometry.js— Geometri doğrulama/yardımcıları
+    ├── spy.js              — kesifYap(), suikastYap(), dinamik maliyetler, liderDevreDisiMi()
     ├── loyalty.js          — sadakatTick(), fetihSonrasiSadakat(), sadakatRenk/Etiket()
-    ├── research.js         — arastirmaTick(), arastirmaEfekt(), arastirmaDalDegistir()
-    └── utils.js            — rastgeleIsim() vb. yardımcılar
+    ├── research.js         — ARASTIRMA_DALLARI (7 dal × 8 seviye), arastirmaTick(), arastirmaEfekt()
+    ├── gucDengesi.js       — gucSiralamasiHesapla() — güç sıralaması paneli
+    ├── liderHavuzu.js      — ~2600 satır statik lider verisi + havuzdan lider seçimi
+    └── utils.js            — rastgeleIsim(), htmlKacir(), adTemizle()
 ```
 
 ---
 
-## Tamamlanan Fazlar
+## Güncel Sistemlerin Özeti (kodla doğrulanmış)
 
-### Faz 1 — Temel Oyun Mekaniği ✅
-- 4×4 grid harita, 3 AI fraksiyonu, tarafsız bölgeler
-- Tur sistemi (`turIsle()`), para + adam üretimi
-- Saldırı / rüşvet / garnizon mekanikleri
-- Temel AI (saldırı kararı, üretim)
+### Birim Tipleri (`units.js`)
+- `tetikci` 🔫 70₺ — temel birim; 14 turda `uzman`a terfi eder
+- `genc` 🧒 35₺ — 8 turda `tetikci`ye dönüşür
+- `uzman` 🎯 — satın alınamaz; 18 turda `agir_silahli`ya terfi eder
+- `agir_silahli` 💪 — hiyerarşinin tepesi, satın alınamaz
+- **`motorlu` birimi YOK.** Eski plandaki bu tip ve no-op `motorluHizTick()`
+  tamamen kaldırıldı.
+- Taşıtlar birim değildir: `TASIT_TIPLERI` — `motor` 🏍️ 110₺ (kapasite 2),
+  `araba` 🚗 240₺ (kapasite 4). Taşıtlar **fraksiyon havuzunda** tutulur
+  (`fraksiyon[owner].tasit`), bölgeye bağlı değildir (`logistics.js`).
 
-### Faz 2 — Genişletilmiş Sistemler ✅
-- Diplomasi (ateşkes, ittifak, ticaret)
-- Görev sistemi (fetih, savunma, para görevleri)
-- Olaylar (polis baskını, iç isyan vb.)
-- Liderler (her fraksiyona rastgele lider, bonus)
-- İstatistik grafik paneli
-- Animasyonlar (savaş, el değiştirme, konvoy)
-- Harita boyutu seçimi (4×4 / 5×5)
-- Zorluk seçimi (kolay / orta / zor)
+### Casusluk (`spy.js`)
+- Maliyetler dinamiktir: keşif taban 100₺, suikast taban 300₺;
+  `operasyonMaliyetIndirim` araştırması ile düşer. Operasyonlar ekip + taşıt
+  kapasitesi ayırır (`bolgeTasitAyir`), sabit "motorlu birim" maliyeti yoktur.
+- Suikast sonuçları: komuta darbesi, bölge kaybı veya çete çöküşü
+  (`suikastKomutaDarbeUygula`, `suikastBolgeKaybiUygula`, `suikastCeteCokusUygula`).
 
-### Faz 3 — UI/UX Modernizasyonu ✅
-- `modal.js` — native alert/confirm/prompt tamamen kaldırıldı, glassmorphism modal
-- `showToast()` — sağ üstte 6 tipli toast bildirimleri (bilgi/basari/uyari/hata/diplo/gorev)
-- Oyun sonu ekranı (`#bitis-overlay`) — tam ekran, emoji, istatistik kartları
-- Glassmorphism `.panel` stili
-- Responsive tasarım (`@media 768px`, `@media 1024px`)
+### Araştırma (`research.js`)
+- **7 dal × 8 seviye** (eski plandaki 3 dal × 3 seviye tarifi geçersiz):
+  `org` (Komuta ve Personel), `taktik` (Savaş Doktrini), `lojistik`, `ekonomi`,
+  `finans`, `istihbarat`, `propaganda`
+- Seviye maliyetleri dal başına ~220 puandan ~11.000+ puana tırmanır
+- ~28 farklı efekt anahtarı (`ui.js` içindeki `ARASTIRMA_EFEKT_BILGI` tablosu günceldir)
 
-### Faz 4 — Altyapı ✅
-- `save.js` — 3 slotlu kayıt/yükleme (localStorage, versiyon 4)
-- `audio.js` — Web Audio API ile saf osilatör sentezi (harici dosya yok)
-  - Sesler: savas, fetih, yenilgi, rusvet, diplo, yatirim, olay, kayip-bolge, kaydet
-  - Arka plan müziği (toggle)
-- Üst barda 🔊/🎵/💾 butonları (`ensureGameControls()`)
-- `bolgeById()` Map cache — O(1) bölge araması
-- İstanbul SVG haritası (küçük/büyük, ilçe polygonları, köprüler, boğaz)
+### Diplomasi (`diplomasi.js`)
+- **Çekirdek sistemdir ve aktiftir** (eski plandaki "kaldırıldı" notu tarihsel bir
+  yanlıştı — sistem geri getirilip genişletildi). Kapsam: savaş ilanı, barış,
+  ateşkes, ittifak, ittifak müdahale kuyruğu, ticaret, tehdit, sabotaj, rüşvet,
+  istihbarat paylaşımı, koalisyon teklifleri, itibar ve ilişki tarihçesi.
+- `ai.js`, `actions.js`, `ui.js`, `main.js` tarafından import edilir.
 
-### Faz 5 — Türk Mafya Bağlamı ✅
-- **`units.js`** — Birim Tipleri Sistemi
-  - `tetikci` (🔫 70₺, saldiri:1.0, savunma:1.0)
-  - `motorlu` (🏍️ 180₺, saldiri:0.9, savunma:0.6, hız:2x, suikast+keşif)
-  - `genc` (👦 35₺, saldiri:0.4, savunma:0.5, 8 turda `agir_silahli`'ya dönüşür)
-  - `agir_silahli` (💪 satın alınamaz, saldiri:1.9, savunma:1.3)
-  - `egitimTick()` — gençlerin eğitim sayacını düşürür, biter → ağır silahlı
-  - `motorluHizTick()` — motorlu birimler her tur 2 adım atar
+### Harita ve Hareket (`ui.js` + `actions.js`)
+- 4 harita modu: `1` Siyasi, `2` Askeri, `3` Ekonomik, `4` Lojistik
+  (lojistik ısı kriteri: bölgedeki konvoy taşıt kapasitesi)
+- SVG konvoy okları: aktif bacak owner renginde animasyonlu kavisli ok,
+  kalan rota soluk kesikli çizgi, bekleyen konvoy ⏸
+- Sürükle-bırak birlik hareketi: kendi bölgenden sürükle → geçerli hedefler
+  vurgulanır → bırakınca slider dialog (dost: transfer, düşman: saldırı);
+  Shift+sürükle her zaman pan
+- Toplanma noktası sistemi: owner başına **çoklu** toplanma bölgesi
+  (`oyun.toplantiNoktasi`), çağır/gönder/sıfırla aksiyonları
+- Esirler: fidye, 1'e 1 takas ve serbest bırakma (ilişki bonusu) akışları
 
-- **`spy.js`** — Casusluk Sistemi
-  - `kesifYap(bolgeId)` — 100₺ + 1 motorlu, %75+ başarı, 6 tur keşif aktif
-  - `suikastYap(bolgeId)` — 300₺ + 2 motorlu, ~%50 başarı, lider 8 tur devre dışı
-  - `liderDevreDisiMi(owner)` — main.js'de lider bonus kontrolü
-  - `kesifAktifMi(bolgeId)` — UI'da keşif gösterimi
-
-- **`loyalty.js`** — Sadakat Sistemi
-  - Her bölgede `b.sadakat` (0–100), başlangıç 55
-  - Güvenlik yatırımı + gelir yatırımı sadakati artırır
-  - Düşman konvoyu geliyorsa −6, fetih sonrası −30 (travma)
-  - Sadakat < 12 ise %12 ihtimalle isyan → bölge tarafsız olur
-  - `fetihSonrasiSadakat()` bölge fethedilince çağrılır
-
-- **`research.js`** — Araştırma Ağacı
-  - 3 dal: `org` (⚔️ Örgütlenme), `ekonomi` (💰), `istihbarat` (🕵️)
-  - Her dalda 3 seviye (60 / 140 / 280 puan)
-  - Üniversite bölgesi: +2 puan/tur bonus
-  - `arastirmaEfekt(kategori)` — kombat, gelir, casusluk bonusları için
-
-- **`config.js`** — Yeni Bölge Özellikleri
-  - `liman` ⚓ gelir +%40
-  - `fabrika` 🏭 üretim +%30
-  - `hastane` 🏥 regen +%100
-  - `kale` 🏰 savunma +2
-  - `gecekondu` 🏘️ üretim +%50, genç üretir
-  - `kumarhane` 🎰 gelir +%70, riskli (polis baskını 2×)
-  - `depo` 📦 savunma +1.5
-  - `carsi` 🛒 gelir +%25
-  - `universite` 🎓 araştırma +2/tur
-
-- **`actions.js`** — Yeni Aksiyonlar
-  - `birimSatinAl(tip)` — seçili bölgeye birim satın al
-  - `casuslukOperasyon(hedefId, 'kesif'|'suikast')` — casusluk başlat
-
-- **`ui.js`** — Yeni Paneller
-  - `detayCiz()`: sadakat barı (renk kodlu) + keşif aktif notu
-  - `islemlerCiz()`: Birlik Satın Al paneli (kendi bölgede), Casusluk paneli (düşman bölgede), Araştırma paneli (her zaman)
-
-- **`state.js`** — Yeni State Alanları
-  ```js
-  oyun.arastirma = { aktifDal: "org", org: {seviye, puan}, ekonomi: {...}, istihbarat: {...} }
-  oyun.birimler[i] = { id, owner, adet, tip, konumId, hedefId, rota, durum, egitimKalan? }
-  oyun.bolgeler[i].sadakat   // 0–100
-  oyun.fraksiyon[id]._liderDevreDisi  // tur sayısı (suikast)
-  oyun.bolgeler[i]._kesif    // { bitis: tur }
-  oyun.fraksiyon[id]._ofke   // suikast başarısızsa +20
-  ```
+### Asayiş (`actions.js` + `main.js`)
+- `oyun.asayis = { sucluluk, polisBaski, sonBaskinTur }`
+- Suçluluk 12+ iken tur başına baskın riski; baskında para cezası + taşıt el koyma
+- HUD: üst barda "Suç" ve "Polis" göstergeleri, risk eşiklerinde renklenir
 
 ---
 
-## Temel Oyun Döngüsü (`main.js` — `turIsle()`)
+## Temel Oyun Döngüsü (`main.js` — `turIsle()` gerçek sırası)
 
-Her tur sırasıyla:
-1. `aiGelisimVeUretim(ai1/ai2/ai3)` — AI para + adam üretimi
-2. `hareketTick()` — konvoylar ilerler, savaşlar çözülür
-3. `egitimTick()` — gençlerin eğitim sayacı
-4. `sadakatTick()` — sadakat güncelle, isyan kontrolü
-5. `arastirmaTick()` — araştırma puanı kazan, seviye atla
-6. `motorluHizTick()` — motorlu birimler ekstra adım atar
-7. `aiSaldiriHareket()` — AI saldırı kararları
-8. `olayTick()` — rastgele olay sistemi
-9. `diplomasiTick()` — süresi dolan anlaşmaları temizle
-10. `gorevKontrol()` — görev durumu kontrol
-11. `yarali/garnizon` döngüleri
-12. `otomatikKaydet()` — her 10 turda otomatik kayıt
-13. `bitisBanner()` — kazanma/kaybetme kontrolü
+1. `oyun.tur++`, `ownerEliminasyonTick()`
+2. `kazananVarMi()` — oyun bittiyse banner + **return** (sonrası çalışmaz)
+3. `oyuncuUretimTick()` — oyuncu para/adam üretimi
+4. `aiGelisimVeUretim(owner)` — aktif AI'lar için
+5. `oyuncuBakimTick()`, `ekonomiKpiTick()`
+6. `aiArastirmaTick(owner)`
+7. `aiSaldiriHareket(owner)`, `aiKoordineliSaldiriDegerlendirYap(owner)`
+8. `aiCasuslukYap(owner)`
+9. `diplomasiTick()` — mesajlar/popuplar, ardından `ittifakMudahaleTick()`, `ittifakBozulduKontrol()`
+10. `olayTick()` — rastgele olaylar
+11. `asayisTick()` — suçluluk/polis baskını
+12. `yaraliTick()` — yaralı iyileşme
+13. `gorevKontrol()`
+14. `egitimTick()`, `gecekonduTick()`, `sadakatTick()`, `arastirmaTick(labBonus)`
+15. `istatistikKaydet()`
+16. `operasyonTick()`, `hareketTick()` — birlik varışı ve savaş çözümü
+17. `ownerEliminasyonTick()`
+18. `otomatikKaydet()` — her 10 turda slot 0'a (tur tamamen işlendikten SONRA)
+19. `uiGuncel()`, `istatistikGrafik()`
 
 ---
 
@@ -158,138 +142,100 @@ Her tur sırasıyla:
 
 ### State Yönetimi
 - `oyun` nesnesi `state.js`'den export edilir, tüm modüller import eder
-- `bolgeById(id)` — Map cache, O(1); bölge eklenince `bolgeMapTemizle()` çağır
+- `bolgeById(id)` — Map cache, O(1); `oyun.bolgeler` dizisi değiştirilirse `bolgeMapTemizle()` çağır
 - Birimler `oyun.birimler[]` dizisinde; `_sil: true` ile işaretle, tur sonunda temizlenir
+- `bolge.garnizon` alanı **ölüdür**: oyun başında/kayıt yüklerken stack'lere
+  dönüştürülüp silinir; savunma her zaman `oyun.birimler`'den okunur
 
 ### Modal Sistemi
-- Tüm `alert/confirm/prompt` yasaklı; `showAlert/showConfirm/showPrompt` (Promise) kullan
+- Tüm `alert/confirm/prompt` yasaklı; `showAlert/showConfirm/showPrompt/showRangePrompt` (Promise) kullan
 - `actions.js`'teki tüm fonksiyonlar `async`; await ile modal bekler
 
+### Güvenlik
+- Kullanıcı girdisi (çete adı vb.) `utils.js`'teki `adTemizle()` ile kaynağında
+  temizlenir; `innerHTML`'e basılan her kullanıcı verisi için `htmlKacir()` kullan
+- Kayıttan yüklenen fraksiyon adları da `save.js` normalizasyonunda temizlenir
+
 ### Combat (Savaş)
-- Saldıran güç: `k.adet × BIRIM_TIPLERI[k.tip].saldiri × (1 + liderBonus + arastirmaEfekt)`
-- Savunan güç: `grupEfektifSavunma(savunanBirimler)` + güvenlik çarpanı + bölge bonusu
+- Saldıran güç: `adet × tip.saldiri × (1 + liderBonus + arastirmaEfekt) × diploCarpan × iliskiCarpan`
+- Savunan güç: `grupEfektifSavunma(savunanBirimler)` + güvenlik + bölge/bina bonusu
 - Lider devre dışıysa (`liderDevreDisiMi`): lider bonusu sıfır
+- Tarafsız bölgelere saldırı YOK; sadece rüşvetle alınır (`teslimAl`)
 
-### Birim Tipleri
-- `oyun.birimler[i].tip` alanı belirler
-- Tanımsız `tip` → `tetikci` olarak varsayılan
-- Satın alınan `genc` tipi `egitimKalan = 8` ile başlar, `egitimTick()`'te sayılır
-
-### Encoding Uyarısı
-- `ui.js` kaynak dosyasında bazı template literal string içindeki HTML attribute quote'ları Unicode curly quote (U+201C/201D) içeriyor — bunlar HTML string içinde zararsız
-- JavaScript kod satırlarındaki `=== "biz"` karşılaştırmalarında ASCII straight quote kullanılmalı
-
----
-
-## Faz Durumu — Guncel
-
-### Faz 6 — Cekirdek Oynanis Yeniden Kurulumu
-
-Bu faz artik mevcut sistemi sadece buyutmek degil, oyunun orta katmanini yeniden kurmak olarak ele alinacak. Ana hedef: diplomasiyi cikarmak, bina sistemini kurmak, olay sistemini buyutmek ve ekonomi-bolge gelisimini bu yeni eksende toplamak.
-
-#### Paket 6.1 — Altyapi ve Temizlik
-- [x] **Eski diplomasi sisteminin kaldirilmasi** — Ateskes / ittifak / ticaret akislari ve bunlara bagli UI temizlendi; oyun catisma-ekonomi eksenine tasindi
-- [x] **Diplomasi kodunun sokulmesi** — `diplomacy.js` bagimliliklari kaldirildi/sadelestirildi
-- [x] **Eski rastgele olay sisteminin devreden cikarilmasi** — Olay seti yeni agirlikli havuz yapisina tasindi
-- [x] **State + kayit entegrasyonu** — `bolge.binalar/binaLimit` ve save normalize akisi eklendi
-
-#### Paket 6.2 — Bina Sistemi
-- [x] **Bolgelere bina ekleme sistemi** — Kontrol edilen bolgelere bina kurma ve bonus etkileri aktif
-- [x] **Bina yukseltme sistemi** — Binalar seviye atlayabiliyor; maliyet ve etki kademeli
-- [x] **Bina yonetimi UI/aksiyonlari** — `actions.js` ve `ui.js` panel/buton baglantilari eklendi
-- [x] **Bolge gelisimi dengesi** — Bina slotu (`binaLimit`) ve bolge bazli yapilasma kurallari aktif
-
-#### Paket 6.3 — Yeni Olay Sistemi
-- [x] **Rastgele olay sisteminin bastan kurulmasi** — Olaylar yeni havuzdan seciliyor
-- [x] **Yeni olay havuzu tasarimi** — Pozitif/negatif/notr coklu olay seti eklendi
-- [x] **Olay agirlik sistemi** — Olasiliklar bolge/bina/sadakat/arastirma etkileriyle agirlikli
-- [x] **Bolge ve bina bagli olaylar** — Kurulu binalar ve bolge ozellikleri olay secimine dogrudan etki ediyor
-
-#### Paket 6.4 — Denge ve Entegrasyon
-- [x] **Gecekondu otomatik genc uretimi** — Gecekondu bolgeleri periyodik genc birimi uretiyor
-- [x] **Kumarhane polis baskini** — Riskli bolgelerde baskin agirligi artirildi
-- [x] **Silah Deposu savunma bonusu** — `depo` savunma bonusu combat hesabinda
-- [x] **Arastirma efektlerinin tam entegrasyonu**
-  - `gelirBonus` → `turIsle()`'deki gelir hesabina ekle
-  - `pasifGelir` → her tur `oyun.fraksiyon.biz.para += 30`
-  - `geceEkonomiBonus` → kumarhane/carsi geliri carpani
-  - `kesifBonus` → `spy.js`'te `basariSansi`'na ekle
-  - `garnizonBonus` → garnizon kapasitesi limiti
-  - `tetikciMaliyetIndirim` → `birimSatinAl()` icinde uygula
-- [x] **Yarali iyilesme sistemi** — Yaralilar turla iyilesip dost bolgeye geri donuyor
-- [ ] **Esir serbest birakma/takas** — Kismi: fidye akisi var, takas/serbest birakma akisi acik
-
-#### Faz 6 Icin Onerilen Uygulama Sirasi
-1. Eski diplomasiyi sok
-2. State/save yapisini bina sistemine hazirla
-3. Bina kurma ve yukseltme sistemini ekle
-4. Yeni olay sistemini kur
-5. Denge ve entegrasyon islerini tamamla
-
-### Faz 7 — AI İyileştirmeleri
-- [x] **AI birim tipi kullanımı** — AI artık duruma göre `tetikci`, `motorlu`, `genc` üretir; `genc` eğitimle `agir_silahli` hattına girer
-- [x] **AI casusluk** — AI oyuncuya karşı keşif ve suikast girişimleri yapabilir
-- [x] **AI sadakat yönetimi** — AI düşük sadakatlı bölgelerine gelir/güvenlik yatırımı yapar
-- [x] **AI araştırma** — AI kendi araştırma puanını biriktirir, dal değiştirir ve efekt kazanır
-- [x] **AI bina yönetimi** — AI bölge durumuna göre bina kurar ve mevcut binaları yükseltir
-- [x] **AI gelişmiş hedef seçimi** — AI saldırı skorunda özel bölge, sınır baskısı ve düşük sadakat fırsatlarını hesaba katar
-
-### Faz 8 — Görsel & Ses Geliştirme
-- [x] **Birim ikonları harita üzerinde** — Bölge kartları, detay paneli ve İstanbul etiketleri artık `tip` bazlı ikon özetlerini gösteriyor
-- [x] **Araştırma ağacı tam UI** — Araştırma paneli dal bazlı ağaç/kart görünümüne geçirildi; kilitli/açık/hedef seviyeler görselleştirildi
-- [x] **Ses: yeni tipler** — `suikast`, `kesif`, `isyan`, `arastirma-seviye` sesleri eklendi ve ilgili akışlara bağlandı
-- [x] **Animasyon: konvoy tipi göster** — Konvoy badge'leri tip ikonlarını gösteriyor; çıkış animasyonu oyuncu ve AI hareketlerine bağlandı
-
-### Faz 9 — Denge & Kalite
-- [x] **Birim bakım maliyeti tip bazlı** — Bakım gideri artık `units.js` üstünden tip bazlı hesaplanıyor; oyuncu ve AI ekonomisine uygulanıyor
-- [x] **Kayıt versiyonu uyumsuzluğu** — `save.js` versiyon 4'e çıkarıldı; eksik `tip`, `sadakat`, `binalar`, `arastirma` ve benzeri alanlar yükleme sırasında normalize ediliyor
-- [x] **Yeni oyun başlatınca birim tipleri** — Başlangıç birlikleri için varsayılan `tetikci` tipi veri ve dönüşüm akışında garanti altına alındı
-- [x] **İstanbul haritasında özellik ikonları** — SVG haritada bölge özellik ikonları ayrı katman olarak gösteriliyor
+### Kayıt (`save.js`)
+- `VERIYON = 8`; sürüm alanı sayısal değilse veya gelecekten ise kayıt reddedilir
+- Eski kayıtlar `oyunDurumuNormallestir()` ile alan alan tamamlanır
+  (garnizon→stack taşıma, `toplanma`→`toplantiNoktasi`, taşıt havuzu, asayiş vb.)
+- Alanın ANLAMI değişirse normalizasyona sürüm-koşullu dönüşüm eklenmeli
+  (şu an sürüm-koşullu migrasyon yok; bilinen açık borç)
 
 ---
 
-## Kritik Bağlantılar (Cross-reference)
+## Faz Durumu
 
-| Özellik | Nerede tanımlandı | Nerede kullanılıyor |
-|---|---|---|
-| `oyun.birimler[].tip` | `units.js / BIRIM_TIPLERI` | `main.js` (combat), `ui.js` (panel), `spy.js` |
-| `oyun.bolgeler[].sadakat` | `loyalty.js` | `ui.js` (detay), `loyalty.js` (tick) |
-| `oyun.arastirma` | `state.js / research.js` | `main.js` (tick), `ui.js` (panel), `spy.js` (bonus) |
-| `fetihSonrasiSadakat()` | `loyalty.js` | `main.js` (hareketTick, fetih anı) |
-| `liderDevreDisiMi()` | `spy.js` | `main.js` (liderBonus hesabı) |
-| `arastirmaEfekt("saldiriBonus")` | `research.js` | `main.js` (combat) |
-| `callbacklar` | `actions.js` | `ui.js` (tüm buton bind'ları) |
-| `showToast()` | `modal.js` | Her modül |
+Faz 1–9 tamamlandı (temel mekanik, genişletilmiş sistemler, UI modernizasyonu,
+altyapı, Türk mafya bağlamı, bina/olay sistemi, AI iyileştirmeleri, görsel/ses,
+denge). Ayrıntılı görev dökümü için `IMPLEMENTASYON_PLANI.md`,
+birlik hareketi için `BIRLIK_HAREKETLERI.md` + `BIRLIK_HAREKETI_YENİ_PLAN.md`,
+diplomasi için `DIPLOMASI_SISTEMI.md`, harita için
+`HARITA_MODLARI_VE_HIZLI_HAREKET.md` dosyalarına bakın.
+
+**Ağustos 2026 oturumunda kapananlar:**
+- [x] Esir serbest bırakma + 1'e 1 takas (Faz 6.4'ün son açık maddesiydi)
+- [x] Lojistik harita modu (4. mod)
+- [x] SVG konvoy okları
+- [x] Sürükle-bırak birlik hareketi
+- [x] Kritik bug düzeltmeleri: XSS kaçışlama, otokayıt sırası, zafer sonrası
+      fazladan tur, istatistik geri yükleme, kayıt sürüm guard'ları,
+      `spy.js` ölü garnizon yazımları
+
+**Bilinen açık borçlar (koddan tespit):**
+- [x] ~~Gelir formülü 5 kopya halinde~~ — `src/ekonomi.js` tek kaynak oldu (main/ui/stats/sim hepsi oradan);
+      ekonomi/asayiş normalizer'ları ve ortalama sadakat `state.js`'te tekilleşti
+- [x] ~~`sim-test.mjs` deterministik değil, assert'süz~~ — `--seed` ile deterministik,
+      assert ihlalinde çıkış kodu 1, gelir hesabı artık gerçek formül
+- [x] ~~Ölü kod temizliği~~ — 16 kullanılmayan fonksiyon/alan silindi (`neutralSavunma`,
+      `enYakinGuvenli`, eski grid üreteci `uretKomsulukGrid`/`BASLANGIC_BOLGELER`,
+      `motorluHizTick` no-op'u, `garnizonAyarla` vb.); kayıt yüklemedeki tavan-atlayan
+      garnizon migrasyon kopyası da state'in kanonik fonksiyonuyla birleştirildi
+- [ ] `liderHavuzu.js` statik verisinin `data/` altına JSON olarak taşınması
+- [ ] index.html erişilebilirlik (aria/landmark yok) ve responsive iyileştirme
+- [ ] Sürüm-koşullu kayıt migrasyonu altyapısı
 
 ---
 
-## Yön Değişikliği Notu
+## Yön Değişikliği Notu (güncel)
 
-- Diplomasi (ittifak, ateskes, ticaret) sistemi cekirdekten cikarildi; oyun dogrudan catisma-ekonomi hattina alindi
-- Rastgele olaylar agirlikli yeni olay havuzuna tasindi
-- Bolge gelisimi bina kurma/yukseltme sistemiyle oyuncu kontrolune acildi
+- ~~"Diplomasi çekirdekten çıkarıldı"~~ — **geçersiz**: diplomasi geri getirildi ve
+  oyunun en büyük modülüne dönüştü (koalisyon, itibar, müdahale kuyruğu dahil)
+- Rastgele olaylar ağırlıklı olay havuzundan seçiliyor (geçerli)
+- Bölge gelişimi bina kurma/yükseltme sistemiyle oyuncu kontrolünde (geçerli)
+- Taşıt/lojistik bölge bazından fraksiyon havuzuna taşındı
+- Garnizon kavramı kaldırıldı; tek kaynak `oyun.birimler`
 
 ---
 
 ## Kod Eklerken Dikkat Edilecekler
 
 1. **Yeni aksiyon eklerken:** `actions.js`'e `async` fonksiyon yaz → `callbacklar` nesnesine ekle → `ui.js`'te butonu bağla
-2. **Yeni tur efekti eklerken:** `main.js`'te `turIsle()` içinde `hareketTick()` sonrasına ekle
-3. **State değişikliği:** `oyun.bolgeler` uzunluğu değişirse `bolgeMapTemizle()` çağır
+2. **Yeni tur efekti eklerken:** `main.js` `turIsle()` içine doğru sıraya ekle; savaş
+   çözümünden (`operasyonTick/hareketTick`) sonra mı önce mi çalışacağına bilinçli karar ver
+3. **State değişikliği:** `oyun.bolgeler` dizisi yenilenirse `bolgeMapTemizle()` çağır;
+   yeni alan eklersen `save.js` `oyunDurumuNormallestir()`'e varsayılanını ekle
 4. **Modal:** `await showAlert/showConfirm/showPrompt` kullan, native dialog kullanma
-5. **Birim silme:** `birim._sil = true` işaretle, tur sonu otomatik temizlenir (main.js)
-6. **Test:** `node --check src/dosyaadi.js` ile syntax kontrolü yapılabilir
+5. **Birim silme:** `birim._sil = true` işaretle, tur sonu otomatik temizlenir
+6. **Kullanıcı verisi render:** `innerHTML` şablonuna giren her serbest metin için `htmlKacir()`
+7. **Syntax kontrolü:** `node --input-type=module --check < src/dosya.js`
+8. **Smoke test:** `node scripts/sim-test.mjs --runs 2 --turns 30`
 
 ---
 
-## Oyun Başlangıç Parametreleri
+## Oyun Başlangıç Parametreleri (İstanbul, orta zorluk)
 
 ```
-Başlangıç durumu (orta zorluk, 4×4 grid):
-  Fraksiyon biz: havuz:20, para:600
-  Fraksiyon ai1/ai2/ai3: havuz:24-28, para:650
-  Bölge sayısı: 16
-  Başlangıç bölgeleri: biz=merkez, ai1=sol üst, ai2=sağ alt, ai3=sağ üst
-  Tüm bölge sadakati: 55
-  Araştırma: tüm dallar seviye 0
+Fraksiyon biz: para 600₺, başlangıç bölgesi Fatih (veya haritadan seçim), 4 tetikçi
+AI1: Esenyurt, AI2: Tuzla, AI3: Beykoz — her biri ~8 birim (nüfusa göre)
+Taşıt havuzu: biz 6 🚗 + 10 🏍️; AI'lar 4 🚗 + 8 🏍️
+Tüm bölge sadakati: 55; araştırma: tüm dallar seviye 0
+Diğer tüm bölgeler tarafsız (saldırılamaz, rüşvetle alınır)
 ```

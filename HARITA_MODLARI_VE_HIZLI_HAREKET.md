@@ -2,6 +2,14 @@
 
 > Mevcut harita altyapısı (SVG İstanbul + Grid) üzerine ekleme kılavuzu.
 
+> **DURUM (2026-08-28): Tamamı uygulandı.** Harita modları (Siyasi/Askeri/Ekonomik +
+> sonradan eklenen 4. Lojistik modu), çift tık hızlı saldırı, Shift+tık transfer,
+> sağ tık bağlam menüsü, slider ile birlik seçimi, sürükle-bırak birlik hareketi
+> (§4: hayalet iz, geçerli hedef vurgulama, bırakınca slider onayı, Shift+sürükle=pan)
+> ve SVG konvoy okları (§6: owner renginde animasyonlu ok + kalan rota izi) kodda.
+> Uyarlama notu: Lojistik mod ısı kriteri, taşıtlar artık bölge yerine fraksiyon
+> havuzunda tutulduğu için "bölgedeki konvoy taşıt kapasitesi" olarak uygulandı.
+
 ---
 
 ## 1. Mevcut Sorun
