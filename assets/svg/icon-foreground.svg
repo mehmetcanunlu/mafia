@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7d774"/>
+      <stop offset="55%" stop-color="#e8b83a"/>
+      <stop offset="100%" stop-color="#c98f1b"/>
+    </linearGradient>
+    <linearGradient id="goldBrim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e8b83a"/>
+      <stop offset="100%" stop-color="#a87613"/>
+    </linearGradient>
+    <linearGradient id="band" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2c2213"/>
+      <stop offset="100%" stop-color="#15100a"/>
+    </linearGradient>
+    <clipPath id="crownClip">
+      <path d="M 384 576 C 384 424 410 300 512 300 C 614 300 640 424 640 576 Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- Android adaptif ikon ön katmanı: yalnız fedora, %66 güvenli alan içinde -->
+  <g transform="translate(512 512) scale(0.75) translate(-512 -463)">
+    <g transform="rotate(-5 512 500)">
+      <ellipse cx="512" cy="566" rx="252" ry="60" fill="url(#goldBrim)" stroke="#8a5f0e" stroke-width="6"/>
+      <path d="M 384 576 C 384 424 410 300 512 300 C 614 300 640 424 640 576 Z"
+            fill="url(#gold)" stroke="#8a5f0e" stroke-width="6"/>
+      <path d="M 468 308 C 498 330 526 330 556 308" fill="none" stroke="#a87613" stroke-width="7" opacity="0.7"/>
+      <rect x="376" y="496" width="272" height="58" fill="url(#band)" clip-path="url(#crownClip)"/>
+      <polygon points="606,498 650,450 632,540" fill="#922b21"/>
+      <path d="M 330 586 Q 512 636 694 586" fill="none" stroke="#ffe9a8" stroke-width="6" opacity="0.45"/>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,12 @@
+{
+  "appId": "com.mafia.bolgesavasi",
+  "appName": "Mafya Bölge Savaşı",
+  "webDir": "www",
+  "backgroundColor": "#0a1118",
+  "ios": {
+    "contentInset": "never"
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}

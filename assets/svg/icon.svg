@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="36%" r="85%">
+      <stop offset="0%" stop-color="#182c40"/>
+      <stop offset="55%" stop-color="#0c1826"/>
+      <stop offset="100%" stop-color="#060b12"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7d774"/>
+      <stop offset="55%" stop-color="#e8b83a"/>
+      <stop offset="100%" stop-color="#c98f1b"/>
+    </linearGradient>
+    <linearGradient id="goldBrim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e8b83a"/>
+      <stop offset="100%" stop-color="#a87613"/>
+    </linearGradient>
+    <linearGradient id="band" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2c2213"/>
+      <stop offset="100%" stop-color="#15100a"/>
+    </linearGradient>
+    <clipPath id="crownClip">
+      <path d="M 384 576 C 384 424 410 300 512 300 C 614 300 640 424 640 576 Z"/>
+    </clipPath>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <!-- Boğaz silüeti (arka planda S-kıvrımı) -->
+  <path d="M 660 -60 C 570 180 790 320 660 520 C 570 660 730 840 690 1084"
+        fill="none" stroke="#24455f" stroke-width="92" stroke-linecap="round" opacity="0.32"/>
+
+  <!-- Boğaz köprüsü -->
+  <g opacity="0.95">
+    <line x1="40" y1="792" x2="984" y2="792" stroke="#43586b" stroke-width="16"/>
+    <rect x="322" y="660" width="18" height="136" fill="#5b7185"/>
+    <rect x="684" y="660" width="18" height="136" fill="#5b7185"/>
+    <line x1="314" y1="700" x2="348" y2="700" stroke="#5b7185" stroke-width="10"/>
+    <line x1="676" y1="700" x2="710" y2="700" stroke="#5b7185" stroke-width="10"/>
+    <path d="M 40 726 L 331 664 Q 512 788 693 664 L 984 726"
+          fill="none" stroke="#58d68d" stroke-width="11" stroke-linecap="round"/>
+    <line x1="422" y1="712" x2="422" y2="792" stroke="#58d68d" stroke-width="4" opacity="0.55"/>
+    <line x1="512" y1="726" x2="512" y2="792" stroke="#58d68d" stroke-width="4" opacity="0.55"/>
+    <line x1="602" y1="712" x2="602" y2="792" stroke="#58d68d" stroke-width="4" opacity="0.55"/>
+  </g>
+
+  <!-- Fedora -->
+  <g transform="rotate(-5 512 500)">
+    <ellipse cx="512" cy="614" rx="235" ry="26" fill="#000000" opacity="0.4"/>
+    <ellipse cx="512" cy="566" rx="252" ry="60" fill="url(#goldBrim)" stroke="#8a5f0e" stroke-width="6"/>
+    <path d="M 384 576 C 384 424 410 300 512 300 C 614 300 640 424 640 576 Z"
+          fill="url(#gold)" stroke="#8a5f0e" stroke-width="6"/>
+    <path d="M 468 308 C 498 330 526 330 556 308" fill="none" stroke="#a87613" stroke-width="7" opacity="0.7"/>
+    <rect x="376" y="496" width="272" height="58" fill="url(#band)" clip-path="url(#crownClip)"/>
+    <polygon points="606,498 650,450 632,540" fill="#922b21"/>
+    <path d="M 330 586 Q 512 636 694 586" fill="none" stroke="#ffe9a8" stroke-width="6" opacity="0.45"/>
+  </g>
+</svg>
