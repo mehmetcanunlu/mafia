@@ -1,0 +1,7 @@
+{
+  "hooks": {
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "python3 \"$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/ikincibeyin/.claude/scripts/beyin_receipt_hatirlat.py\"", "timeout": 5 } ] }
+    ]
+  }
+}
